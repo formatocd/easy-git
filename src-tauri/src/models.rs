@@ -47,3 +47,10 @@ pub struct RepoSummary {
     pub current_branch: Option<String>,
     pub is_clean: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileChange {
+    pub path: String,
+    pub status: String, // "M", "A", "D", "R"
+    pub old_path: Option<String>,
+}

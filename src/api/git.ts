@@ -50,6 +50,12 @@ export interface RepoSummary {
   is_clean: boolean;
 }
 
+export interface FileChange {
+  path: string;
+  status: string; // "M" | "A" | "D" | "R"
+  old_path?: string | null;
+}
+
 export async function isGitRepo(path: string): Promise<boolean> {
   return invoke<boolean>("is_git_repo", { path });
 }
@@ -68,4 +74,30 @@ export async function getCommitGraph(path: string, limit?: number): Promise<Comm
 
 export async function getBranches(path: string): Promise<Branch[]> {
   return invoke<Branch[]>("get_branches", { path });
+}
+
+export async function getCommitFiles(
+  path: string,
+  hash: string,
+  parentHash?: string | null,
+): Promise<FileChange[]> {
+  return invoke<FileChange[]>("get_commit_files", {
+    path,
+    hash,
+    parentHash: parentHash || null,
+  });
+}
+
+export async function getCommitFileDiff(
+  path: string,
+  hash: string,
+  filePath: string,
+  parentHash?: string | null,
+): Promise<string> {
+  return invoke<string>("get_commit_file_diff", {
+    path,
+    hash,
+    filePath,
+    parentHash: parentHash || null,
+  });
 }

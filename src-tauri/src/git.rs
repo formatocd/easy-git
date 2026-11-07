@@ -4,7 +4,7 @@ use std::process::Command;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::models::{Branch, Commit, CommitWithGraph, RepoSummary};
+use crate::models::{Branch, Commit, CommitWithGraph, FileChange, RepoSummary};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -210,4 +210,89 @@ pub fn get_branches(path: &str) -> Result<Vec<Branch>, String> {
 pub fn get_commits_with_graph(path: &str, limit: Option<usize>) -> Result<Vec<CommitWithGraph>, String> {
     let commits = get_commits(path, limit)?;
     Ok(crate::graph::compute_graph(commits))
+}
+
+pub fn get_commit_files(
+    path: &str,
+    hash: &str,
+    parent_hash: Option<&str>,
+) -> Result<Vec<FileChange>, String> {
+    if !is_git_repo(path) {
+        return Err(format!("'{}' is not a Git repository", path));
+    }
+
+    let mut cmd = create_git_command(path);
+    if let Some(parent) = parent_hash {
+        cmd.args(["diff", "--name-status", "-M", parent, hash]);
+    } else {
+        cmd.args(["diff-tree", "-r", "--root", "--no-commit-id", "--name-status", "-M", hash]);
+    }
+
+    let output = cmd.output().map_err(|e| format!("Failed to get commit files: {}", e))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut files = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.is_empty() {
+            continue;
+        }
+
+        let raw_status = parts[0].trim();
+        let status = if raw_status.starts_with('R') {
+            "R".to_string()
+        } else {
+            raw_status.to_string()
+        };
+
+        if status == "R" && parts.len() >= 3 {
+            files.push(FileChange {
+                old_path: Some(parts[1].trim().to_string()),
+                path: parts[2].trim().to_string(),
+                status,
+            });
+        } else if parts.len() >= 2 {
+            files.push(FileChange {
+                old_path: None,
+                path: parts[1].trim().to_string(),
+                status,
+            });
+        }
+    }
+
+    Ok(files)
+}
+
+pub fn get_commit_file_diff(
+    path: &str,
+    hash: &str,
+    parent_hash: Option<&str>,
+    file_path: &str,
+) -> Result<String, String> {
+    if !is_git_repo(path) {
+        return Err(format!("'{}' is not a Git repository", path));
+    }
+
+    let mut cmd = create_git_command(path);
+    if let Some(parent) = parent_hash {
+        cmd.args(["diff", "-U3", parent, hash, "--", file_path]);
+    } else {
+        cmd.args(["show", "-U3", "--format=", hash, "--", file_path]);
+    }
+
+    let output = cmd.output().map_err(|e| format!("Failed to get file diff: {}", e))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }

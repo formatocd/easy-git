@@ -4,11 +4,15 @@ import {
   openRepository,
   getCommitGraph,
   getBranches,
+  getCommitFiles,
+  getCommitFileDiff,
   RepoSummary,
   CommitWithGraph,
   Branch,
+  FileChange,
 } from "./api/git";
 import { GraphCell } from "./components/GraphCell";
+import { DiffViewer } from "./components/DiffViewer";
 import {
   FolderOpen,
   GitBranch,
@@ -23,6 +27,7 @@ import {
   Clock,
   User,
   Hash,
+  FileText,
 } from "./components/Icons";
 import "./App.css";
 
@@ -32,10 +37,17 @@ function App() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [commits, setCommits] = useState<CommitWithGraph[]>([]);
   const [selectedCommit, setSelectedCommit] = useState<CommitWithGraph | null>(null);
+
+  // File changes & Diff state
+  const [commitFiles, setCommitFiles] = useState<FileChange[]>([]);
+  const [selectedFile, setSelectedFile] = useState<FileChange | null>(null);
+  const [diffText, setDiffText] = useState<string | null>(null);
+  const [loadingFiles, setLoadingFiles] = useState(false);
+  const [loadingDiff, setLoadingDiff] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Format relative or friendly date
   function formatDate(timestamp: number) {
     if (!timestamp) return "—";
     const date = new Date(timestamp * 1000);
@@ -64,8 +76,14 @@ function App() {
       setBranches(repoBranches);
       setCommits(repoCommits);
       setRepoPath(path);
+
       if (repoCommits.length > 0) {
         setSelectedCommit(repoCommits[0]);
+      } else {
+        setSelectedCommit(null);
+        setCommitFiles([]);
+        setSelectedFile(null);
+        setDiffText(null);
       }
     } catch (err: unknown) {
       setError(typeof err === "string" ? err : String(err));
@@ -90,7 +108,86 @@ function App() {
     }
   }
 
-  // Load current repository initially if path is set
+  // When a commit is selected, load its changed files
+  useEffect(() => {
+    if (!selectedCommit || !repoPath) {
+      setCommitFiles([]);
+      setSelectedFile(null);
+      setDiffText(null);
+      return;
+    }
+
+    let isCancelled = false;
+    async function fetchFiles() {
+      setLoadingFiles(true);
+      try {
+        const parent = selectedCommit?.parents[0] || null;
+        const files = await getCommitFiles(repoPath, selectedCommit!.hash, parent);
+        if (!isCancelled) {
+          setCommitFiles(files);
+          if (files.length > 0) {
+            setSelectedFile(files[0]);
+          } else {
+            setSelectedFile(null);
+            setDiffText(null);
+          }
+        }
+      } catch (err) {
+        if (!isCancelled) {
+          console.error("Error loading commit files:", err);
+          setCommitFiles([]);
+          setSelectedFile(null);
+          setDiffText(null);
+        }
+      } finally {
+        if (!isCancelled) setLoadingFiles(false);
+      }
+    }
+
+    fetchFiles();
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedCommit?.hash, repoPath]);
+
+  // When a file is selected, load its diff
+  useEffect(() => {
+    if (!selectedCommit || !selectedFile || !repoPath) {
+      setDiffText(null);
+      return;
+    }
+
+    let isCancelled = false;
+    async function fetchDiff() {
+      setLoadingDiff(true);
+      try {
+        const parent = selectedCommit?.parents[0] || null;
+        const diff = await getCommitFileDiff(
+          repoPath,
+          selectedCommit!.hash,
+          selectedFile!.path,
+          parent,
+        );
+        if (!isCancelled) {
+          setDiffText(diff);
+        }
+      } catch (err) {
+        if (!isCancelled) {
+          console.error("Error loading diff:", err);
+          setDiffText("Error al cargar las diferencias del archivo.");
+        }
+      } finally {
+        if (!isCancelled) setLoadingDiff(false);
+      }
+    }
+
+    fetchDiff();
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedCommit?.hash, selectedFile?.path, repoPath]);
+
+  // Load current repository initially
   useEffect(() => {
     loadRepository("D:\\Usuarios\\Carlos\\Proyectos\\Rust\\git_client");
   }, []);
@@ -98,9 +195,22 @@ function App() {
   const localBranches = branches.filter((b) => !b.is_remote);
   const remoteBranches = branches.filter((b) => b.is_remote);
 
+  function getStatusBadge(status: string) {
+    switch (status) {
+      case "A":
+        return <span className="text-[10px] px-1 bg-emerald-500/20 text-emerald-400 font-bold rounded">A</span>;
+      case "D":
+        return <span className="text-[10px] px-1 bg-rose-500/20 text-rose-400 font-bold rounded">D</span>;
+      case "R":
+        return <span className="text-[10px] px-1 bg-purple-500/20 text-purple-400 font-bold rounded">R</span>;
+      default:
+        return <span className="text-[10px] px-1 bg-amber-500/20 text-amber-400 font-bold rounded">M</span>;
+    }
+  }
+
   return (
     <div className="flex flex-col h-screen w-screen bg-[#18181b] text-zinc-100 select-none overflow-hidden font-sans">
-      {/* 1. TOP TOOLBAR (SourceTree Style) */}
+      {/* 1. TOP TOOLBAR */}
       <header className="flex items-center justify-between px-4 py-2 bg-[#202023] border-b border-zinc-800 shrink-0">
         <div className="flex items-center space-x-2">
           <div className="flex items-center space-x-2 mr-4">
@@ -169,9 +279,9 @@ function App() {
         )}
       </header>
 
-      {/* 2. MAIN BODY (Sidebar + Graph Table + Commit Details) */}
+      {/* 2. MAIN BODY */}
       <div className="flex flex-1 overflow-hidden">
-        {/* LEFT SIDEBAR (SourceTree Style) */}
+        {/* LEFT SIDEBAR */}
         <aside className="w-56 bg-[#1b1b1e] border-r border-zinc-800 flex flex-col shrink-0 text-xs">
           <div className="p-3 border-b border-zinc-800/80 font-semibold text-zinc-400 uppercase tracking-wider text-[10px]">
             Explorador
@@ -225,7 +335,7 @@ function App() {
           </div>
         </aside>
 
-        {/* RIGHT AREA: GRAPH TABLE + COMMIT DETAIL */}
+        {/* RIGHT AREA: GRAPH TABLE + COMMIT DETAIL & DIFF */}
         <div className="flex-1 flex flex-col overflow-hidden bg-[#141416]">
           {error && (
             <div className="m-3 p-3 bg-red-950/40 border border-red-800 text-red-300 rounded text-xs">
@@ -312,49 +422,78 @@ function App() {
             </table>
           </div>
 
-          {/* BOTTOM COMMIT DETAIL PANEL */}
+          {/* BOTTOM COMMIT INSPECTION PANEL (Files + Diff Viewer) */}
           {selectedCommit && (
-            <div className="h-44 border-t border-zinc-800 bg-[#1c1c1f] p-3 flex flex-col shrink-0 text-xs">
-              <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
-                <div className="flex items-center space-x-2">
-                  <span className="font-mono text-amber-400 font-semibold">
-                    {selectedCommit.hash}
-                  </span>
-                  <div className="flex items-center text-zinc-400 text-[11px] space-x-1">
-                    <User size={12} />
-                    <span>{selectedCommit.author_name}</span>
-                    <span className="text-zinc-500">&lt;{selectedCommit.author_email}&gt;</span>
-                  </div>
-                </div>
-                <div className="flex items-center text-zinc-400 text-[11px] space-x-1">
-                  <Clock size={12} />
-                  <span>{formatDate(selectedCommit.timestamp)}</span>
-                </div>
-              </div>
-
-              <div className="flex-1 py-2 overflow-y-auto">
-                <p className="font-semibold text-zinc-100">{selectedCommit.summary}</p>
-                {selectedCommit.body && (
-                  <pre className="mt-1 text-zinc-400 font-sans whitespace-pre-wrap text-[11px]">
-                    {selectedCommit.body}
-                  </pre>
-                )}
-              </div>
-
-              {selectedCommit.parents.length > 0 && (
-                <div className="pt-2 border-t border-zinc-800/80 flex items-center space-x-2 text-[11px] text-zinc-400">
-                  <Hash size={12} className="text-zinc-500" />
-                  <span>Padres:</span>
-                  {selectedCommit.parents.map((p) => (
-                    <span
-                      key={p}
-                      className="font-mono bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300"
-                    >
-                      {p.substring(0, 7)}
+            <div className="h-72 border-t border-zinc-800 bg-[#1c1c1f] flex shrink-0 text-xs overflow-hidden">
+              {/* Left Column: Commit Summary & Changed Files List */}
+              <div className="w-80 border-r border-zinc-800 flex flex-col shrink-0">
+                {/* Commit Meta */}
+                <div className="p-3 border-b border-zinc-800/80 bg-[#1e1e22]">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-amber-400 font-semibold text-[11px]">
+                      {selectedCommit.short_hash}
                     </span>
-                  ))}
+                    <div className="flex items-center text-zinc-400 text-[11px] space-x-1">
+                      <Clock size={11} />
+                      <span>{formatDate(selectedCommit.timestamp)}</span>
+                    </div>
+                  </div>
+                  <div className="mt-1 flex items-center text-zinc-300 text-[11px] space-x-1">
+                    <User size={11} className="text-zinc-400" />
+                    <span className="font-medium truncate">{selectedCommit.author_name}</span>
+                  </div>
+                  <p className="mt-1.5 text-zinc-200 font-medium text-xs line-clamp-2">
+                    {selectedCommit.summary}
+                  </p>
                 </div>
-              )}
+
+                {/* Changed Files Header */}
+                <div className="px-3 py-1.5 bg-[#18181b] border-b border-zinc-800/60 flex items-center justify-between text-[11px] text-zinc-400">
+                  <span className="font-medium flex items-center space-x-1">
+                    <FileText size={12} />
+                    <span>Archivos ({commitFiles.length})</span>
+                  </span>
+                  {loadingFiles && <span className="text-zinc-500 text-[10px]">Cargando...</span>}
+                </div>
+
+                {/* Files List */}
+                <div className="flex-1 overflow-y-auto p-1 space-y-0.5">
+                  {commitFiles.map((file) => {
+                    const isFileSelected = selectedFile?.path === file.path;
+                    return (
+                      <div
+                        key={file.path}
+                        onClick={() => setSelectedFile(file)}
+                        className={`flex items-center space-x-2 px-2 py-1.5 rounded cursor-pointer transition text-xs ${
+                          isFileSelected
+                            ? "bg-blue-600/25 text-sky-200 font-medium"
+                            : "hover:bg-zinc-800/60 text-zinc-300"
+                        }`}
+                      >
+                        {getStatusBadge(file.status)}
+                        <span className="truncate flex-1 font-mono text-[11px]">
+                          {file.path}
+                        </span>
+                      </div>
+                    );
+                  })}
+
+                  {!loadingFiles && commitFiles.length === 0 && (
+                    <div className="p-3 text-center text-zinc-500 text-[11px]">
+                      No hay archivos modificados en este commit.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Unified Diff Viewer */}
+              <div className="flex-1 flex flex-col overflow-hidden">
+                <DiffViewer
+                  diffText={diffText}
+                  loading={loadingDiff}
+                  filePath={selectedFile?.path}
+                />
+              </div>
             </div>
           )}
         </div>
