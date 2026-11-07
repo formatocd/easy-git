@@ -12,6 +12,30 @@ export interface Commit {
   refs: string[];
 }
 
+export interface GraphSegment {
+  from_col: number;
+  from_y: number; // 0 = Top, 1 = Center, 2 = Bottom
+  to_col: number;
+  to_y: number;   // 0 = Top, 1 = Center, 2 = Bottom
+  color_index: number;
+}
+
+export interface CommitWithGraph {
+  hash: string;
+  short_hash: string;
+  parents: string[];
+  author_name: string;
+  author_email: string;
+  timestamp: number;
+  summary: string;
+  body: string;
+  refs: string[];
+  node_col: number;
+  color_index: number;
+  max_col: number;
+  segments: GraphSegment[];
+}
+
 export interface Branch {
   name: string;
   is_current: boolean;
@@ -36,6 +60,10 @@ export async function openRepository(path: string): Promise<RepoSummary> {
 
 export async function getCommits(path: string, limit?: number): Promise<Commit[]> {
   return invoke<Commit[]>("get_commits", { path, limit });
+}
+
+export async function getCommitGraph(path: string, limit?: number): Promise<CommitWithGraph[]> {
+  return invoke<CommitWithGraph[]>("get_commit_graph", { path, limit });
 }
 
 export async function getBranches(path: string): Promise<Branch[]> {
