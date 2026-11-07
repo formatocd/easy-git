@@ -4,7 +4,7 @@ use std::process::Command;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use crate::models::{Branch, Commit, RepoSummary};
+use crate::models::{Branch, Commit, CommitWithGraph, RepoSummary};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -205,4 +205,9 @@ pub fn get_branches(path: &str) -> Result<Vec<Branch>, String> {
     }
 
     Ok(branches)
+}
+
+pub fn get_commits_with_graph(path: &str, limit: Option<usize>) -> Result<Vec<CommitWithGraph>, String> {
+    let commits = get_commits(path, limit)?;
+    Ok(crate::graph::compute_graph(commits))
 }

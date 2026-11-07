@@ -1,7 +1,8 @@
 mod git;
+mod graph;
 mod models;
 
-use models::{Branch, Commit, RepoSummary};
+use models::{Branch, Commit, CommitWithGraph, RepoSummary};
 
 #[tauri::command]
 fn is_git_repo(path: String) -> bool {
@@ -19,6 +20,11 @@ fn get_commits(path: String, limit: Option<usize>) -> Result<Vec<Commit>, String
 }
 
 #[tauri::command]
+fn get_commit_graph(path: String, limit: Option<usize>) -> Result<Vec<CommitWithGraph>, String> {
+    git::get_commits_with_graph(&path, limit)
+}
+
+#[tauri::command]
 fn get_branches(path: String) -> Result<Vec<Branch>, String> {
     git::get_branches(&path)
 }
@@ -32,6 +38,7 @@ pub fn run() {
             is_git_repo,
             open_repository,
             get_commits,
+            get_commit_graph,
             get_branches
         ])
         .run(tauri::generate_context!())

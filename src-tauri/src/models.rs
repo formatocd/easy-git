@@ -14,6 +14,25 @@ pub struct Commit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphSegment {
+    pub from_col: usize,
+    pub from_y: u8, // 0 = Top, 1 = Center, 2 = Bottom
+    pub to_col: usize,
+    pub to_y: u8,   // 0 = Top, 1 = Center, 2 = Bottom
+    pub color_index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitWithGraph {
+    #[serde(flatten)]
+    pub commit: Commit,
+    pub node_col: usize,
+    pub color_index: usize,
+    pub max_col: usize,
+    pub segments: Vec<GraphSegment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Branch {
     pub name: String,
     pub is_current: bool,
