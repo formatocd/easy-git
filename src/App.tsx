@@ -14,6 +14,7 @@ import {
 import { GraphCell } from "./components/GraphCell";
 import { DiffViewer } from "./components/DiffViewer";
 import { FileTree } from "./components/FileTree";
+import { WorkingCopyView } from "./components/WorkingCopyView";
 import {
   FolderOpen,
   GitBranch,
@@ -27,6 +28,8 @@ import {
   Tag,
   Clock,
   User,
+  FileDiff,
+  Layers,
 } from "./components/Icons";
 import "./App.css";
 
@@ -37,7 +40,10 @@ function App() {
   const [commits, setCommits] = useState<CommitWithGraph[]>([]);
   const [selectedCommit, setSelectedCommit] = useState<CommitWithGraph | null>(null);
 
-  // File changes & Diff state
+  // Active view: "history" (Commit DAG) or "working_copy" (Staging & Commit)
+  const [activeView, setActiveView] = useState<"history" | "working_copy">("history");
+
+  // File changes & Diff state for History View
   const [commitFiles, setCommitFiles] = useState<FileChange[]>([]);
   const [selectedFile, setSelectedFile] = useState<FileChange | null>(null);
   const [diffText, setDiffText] = useState<string | null>(null);
@@ -111,7 +117,7 @@ function App() {
     }
   }
 
-  // When a commit is selected, load its changed files
+  // When a commit is selected in History, load its changed files
   useEffect(() => {
     if (!selectedCommit || !repoPath) {
       setCommitFiles([]);
@@ -153,7 +159,7 @@ function App() {
     };
   }, [selectedCommit?.hash, repoPath]);
 
-  // When a file is selected, load its diff
+  // When a file is selected in History, load its diff
   useEffect(() => {
     if (!selectedCommit || !selectedFile || !repoPath) {
       setDiffText(null);
@@ -195,7 +201,13 @@ function App() {
     loadRepository("D:\\Usuarios\\Carlos\\Proyectos\\Rust\\git_client");
   }, []);
 
-  // Drag handlers for resizable panels
+  // When a commit finishes in WorkingCopyView, reload repo and show the graph
+  const handleCommitSuccess = () => {
+    loadRepository(repoPath);
+    setActiveView("history");
+  };
+
+  // Drag handlers for resizable panels in History view
   const handleVerticalResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
@@ -260,10 +272,18 @@ function App() {
           <div className="h-4 w-px bg-zinc-700 mx-1" />
 
           {/* Action buttons */}
-          <button className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer">
+          <button
+            onClick={() => setActiveView("working_copy")}
+            className={`flex items-center space-x-1 px-2.5 py-1.5 rounded text-xs transition cursor-pointer ${
+              activeView === "working_copy"
+                ? "bg-emerald-600/30 text-emerald-300 font-semibold border border-emerald-500/50"
+                : "text-zinc-300 hover:bg-zinc-800"
+            }`}
+          >
             <GitCommit size={14} className="text-emerald-400" />
             <span>Commit</span>
           </button>
+
           <button className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer">
             <ArrowDown size={14} className="text-blue-400" />
             <span>Pull</span>
@@ -295,14 +315,18 @@ function App() {
               <GitBranch size={13} className="text-sky-400" />
               <span className="text-sky-300 font-medium">{summary.current_branch || "HEAD"}</span>
             </div>
-            <div className="flex items-center space-x-1">
+            <div
+              onClick={() => setActiveView("working_copy")}
+              className="flex items-center space-x-1 cursor-pointer"
+              title="Haz clic para ver los cambios y preparar commit"
+            >
               {summary.is_clean ? (
                 <span className="flex items-center text-emerald-400 text-[11px] bg-emerald-950/60 border border-emerald-800 px-2 py-0.5 rounded">
                   <CheckCircle2 size={11} className="mr-1" /> Limpio
                 </span>
               ) : (
-                <span className="flex items-center text-amber-400 text-[11px] bg-amber-950/60 border border-amber-800 px-2 py-0.5 rounded">
-                  <AlertCircle size={11} className="mr-1" /> Cambios
+                <span className="flex items-center text-amber-400 text-[11px] bg-amber-950/60 border border-amber-800 px-2 py-0.5 rounded hover:bg-amber-900/60 transition">
+                  <AlertCircle size={11} className="mr-1" /> Cambios pendientes
                 </span>
               )}
             </div>
@@ -312,17 +336,54 @@ function App() {
 
       {/* 2. MAIN BODY */}
       <div className="flex flex-1 overflow-hidden">
-        {/* LEFT SIDEBAR */}
+        {/* LEFT SIDEBAR (SourceTree Style) */}
         <aside className="w-56 bg-[#1b1b1e] border-r border-zinc-800 flex flex-col shrink-0 text-xs">
           <div className="p-3 border-b border-zinc-800/80 font-semibold text-zinc-400 uppercase tracking-wider text-[10px]">
             Explorador
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-4">
-            {/* Local Branches */}
+            {/* WORKSPACE SECTION (SourceTree File Status vs History) */}
+            <div>
+              <div className="text-zinc-500 font-semibold px-2 py-1 text-[10px] uppercase tracking-wider">
+                Espacio de Trabajo
+              </div>
+              <ul className="mt-0.5 space-y-0.5">
+                <li
+                  onClick={() => setActiveView("working_copy")}
+                  className={`flex items-center justify-between px-2 py-1.5 rounded cursor-pointer transition ${
+                    activeView === "working_copy"
+                      ? "bg-sky-600/20 text-sky-300 font-semibold border-l-2 border-sky-400"
+                      : "text-zinc-300 hover:bg-zinc-800"
+                  }`}
+                >
+                  <span className="flex items-center space-x-2">
+                    <FileDiff size={14} className="text-amber-400" />
+                    <span>Estado archivos</span>
+                  </span>
+                  {summary && !summary.is_clean && (
+                    <span className="w-2 h-2 rounded-full bg-amber-400" />
+                  )}
+                </li>
+
+                <li
+                  onClick={() => setActiveView("history")}
+                  className={`flex items-center space-x-2 px-2 py-1.5 rounded cursor-pointer transition ${
+                    activeView === "history"
+                      ? "bg-sky-600/20 text-sky-300 font-semibold border-l-2 border-sky-400"
+                      : "text-zinc-300 hover:bg-zinc-800"
+                  }`}
+                >
+                  <Layers size={14} className="text-sky-400" />
+                  <span>Historial</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* LOCAL BRANCHES */}
             <div>
               <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1">
                 <span className="flex items-center space-x-1.5">
-                  <GitBranch size={13} className="text-sky-400" />
+                  <GitBranch size={13} className="text-purple-400" />
                   <span>Ramas Locales ({localBranches.length})</span>
                 </span>
               </div>
@@ -330,9 +391,10 @@ function App() {
                 {localBranches.map((b) => (
                   <li
                     key={b.name}
+                    onClick={() => setActiveView("history")}
                     className={`flex items-center px-2 py-1 rounded cursor-pointer transition ${
                       b.is_current
-                        ? "bg-sky-600/20 text-sky-300 font-semibold border-l-2 border-sky-400"
+                        ? "bg-purple-600/20 text-purple-300 font-semibold border-l-2 border-purple-400"
                         : "text-zinc-300 hover:bg-zinc-800"
                     }`}
                   >
@@ -342,12 +404,12 @@ function App() {
               </ul>
             </div>
 
-            {/* Remote Branches */}
+            {/* REMOTE BRANCHES */}
             {remoteBranches.length > 0 && (
               <div>
                 <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1">
                   <span className="flex items-center space-x-1.5">
-                    <Tag size={13} className="text-purple-400" />
+                    <Tag size={13} className="text-zinc-400" />
                     <span>Remotas ({remoteBranches.length})</span>
                   </span>
                 </div>
@@ -355,6 +417,7 @@ function App() {
                   {remoteBranches.map((b) => (
                     <li
                       key={b.name}
+                      onClick={() => setActiveView("history")}
                       className="flex items-center px-2 py-1 text-zinc-400 hover:bg-zinc-800 rounded cursor-pointer transition"
                     >
                       <span className="truncate">{b.name}</span>
@@ -366,162 +429,168 @@ function App() {
           </div>
         </aside>
 
-        {/* RIGHT AREA: GRAPH TABLE + RESIZABLE DETAIL & DIFF */}
-        <div className="flex-1 flex flex-col overflow-hidden bg-[#141416]">
-          {error && (
-            <div className="m-3 p-3 bg-red-950/40 border border-red-800 text-red-300 rounded text-xs">
-              <strong>Error:</strong> {error}
+        {/* RIGHT AREA: CONDITIONAL VIEW */}
+        {activeView === "working_copy" ? (
+          <WorkingCopyView
+            repoPath={repoPath}
+            onCommitSuccess={handleCommitSuccess}
+          />
+        ) : (
+          /* HISTORY GRAPH VIEW */
+          <div className="flex-1 flex flex-col overflow-hidden bg-[#141416]">
+            {error && (
+              <div className="m-3 p-3 bg-red-950/40 border border-red-800 text-red-300 rounded text-xs">
+                <strong>Error:</strong> {error}
+              </div>
+            )}
+
+            {/* COMMIT GRAPH TABLE */}
+            <div className="flex-1 overflow-auto">
+              <table className="w-full border-collapse text-left text-xs table-fixed">
+                <thead className="sticky top-0 bg-[#1e1e22] text-zinc-400 border-b border-zinc-800 z-10 text-[11px]">
+                  <tr>
+                    <th className="py-2 px-3 font-semibold w-24">Grafo</th>
+                    <th className="py-2 px-3 font-semibold">Descripción</th>
+                    <th className="py-2 px-3 font-semibold w-20">Hash</th>
+                    <th className="py-2 px-3 font-semibold w-36">Autor</th>
+                    <th className="py-2 px-3 font-semibold w-36">Fecha</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-800/40 font-normal">
+                  {commits.map((c) => {
+                    const isSelected = selectedCommit?.hash === c.hash;
+                    return (
+                      <tr
+                        key={c.hash}
+                        onClick={() => setSelectedCommit(c)}
+                        className={`cursor-pointer transition-colors ${
+                          isSelected
+                            ? "bg-blue-600/20 text-white"
+                            : "hover:bg-zinc-800/50 text-zinc-300"
+                        }`}
+                        style={{ height: "32px" }}
+                      >
+                        {/* Grafo SVG */}
+                        <td className="p-0 align-middle">
+                          <GraphCell
+                            node_col={c.node_col}
+                            color_index={c.color_index}
+                            max_col={c.max_col}
+                            segments={c.segments}
+                            isSelected={isSelected}
+                          />
+                        </td>
+
+                        {/* Mensaje + Badges de Ramas */}
+                        <td className="py-1.5 px-3 truncate font-medium">
+                          <div className="flex items-center space-x-1.5 overflow-hidden">
+                            {c.refs.map((ref) => (
+                              <span
+                                key={ref}
+                                className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 ${
+                                  ref.includes("HEAD")
+                                    ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
+                                    : ref.includes("origin/")
+                                    ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                                    : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                                }`}
+                              >
+                                {ref}
+                              </span>
+                            ))}
+                            <span className="truncate">{c.summary}</span>
+                          </div>
+                        </td>
+
+                        {/* Hash */}
+                        <td className="py-1.5 px-3 font-mono text-zinc-400 text-[11px]">
+                          {c.short_hash}
+                        </td>
+
+                        {/* Autor */}
+                        <td className="py-1.5 px-3 truncate text-zinc-400">
+                          {c.author_name}
+                        </td>
+
+                        {/* Fecha */}
+                        <td className="py-1.5 px-3 text-zinc-500 text-[11px] truncate">
+                          {formatDate(c.timestamp)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
-          )}
 
-          {/* COMMIT GRAPH TABLE */}
-          <div className="flex-1 overflow-auto">
-            <table className="w-full border-collapse text-left text-xs table-fixed">
-              <thead className="sticky top-0 bg-[#1e1e22] text-zinc-400 border-b border-zinc-800 z-10 text-[11px]">
-                <tr>
-                  <th className="py-2 px-3 font-semibold w-24">Grafo</th>
-                  <th className="py-2 px-3 font-semibold">Descripción</th>
-                  <th className="py-2 px-3 font-semibold w-20">Hash</th>
-                  <th className="py-2 px-3 font-semibold w-36">Autor</th>
-                  <th className="py-2 px-3 font-semibold w-36">Fecha</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-800/40 font-normal">
-                {commits.map((c) => {
-                  const isSelected = selectedCommit?.hash === c.hash;
-                  return (
-                    <tr
-                      key={c.hash}
-                      onClick={() => setSelectedCommit(c)}
-                      className={`cursor-pointer transition-colors ${
-                        isSelected
-                          ? "bg-blue-600/20 text-white"
-                          : "hover:bg-zinc-800/50 text-zinc-300"
-                      }`}
-                      style={{ height: "32px" }}
-                    >
-                      {/* Grafo SVG */}
-                      <td className="p-0 align-middle">
-                        <GraphCell
-                          node_col={c.node_col}
-                          color_index={c.color_index}
-                          max_col={c.max_col}
-                          segments={c.segments}
-                          isSelected={isSelected}
-                        />
-                      </td>
-
-                      {/* Mensaje + Badges de Ramas */}
-                      <td className="py-1.5 px-3 truncate font-medium">
-                        <div className="flex items-center space-x-1.5 overflow-hidden">
-                          {c.refs.map((ref) => (
-                            <span
-                              key={ref}
-                              className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 ${
-                                ref.includes("HEAD")
-                                  ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
-                                  : ref.includes("origin/")
-                                  ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
-                                  : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                              }`}
-                            >
-                              {ref}
-                            </span>
-                          ))}
-                          <span className="truncate">{c.summary}</span>
-                        </div>
-                      </td>
-
-                      {/* Hash */}
-                      <td className="py-1.5 px-3 font-mono text-zinc-400 text-[11px]">
-                        {c.short_hash}
-                      </td>
-
-                      {/* Autor */}
-                      <td className="py-1.5 px-3 truncate text-zinc-400">
-                        {c.author_name}
-                      </td>
-
-                      {/* Fecha */}
-                      <td className="py-1.5 px-3 text-zinc-500 text-[11px] truncate">
-                        {formatDate(c.timestamp)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* VERTICAL RESIZER HANDLE (between Commit Table & Bottom Panel) */}
-          {selectedCommit && (
-            <div
-              onMouseDown={handleVerticalResize}
-              className="h-1.5 w-full bg-zinc-800 hover:bg-sky-500 active:bg-sky-400 cursor-row-resize shrink-0 transition-colors z-20"
-              title="Arrastra para redimensionar el panel"
-            />
-          )}
-
-          {/* BOTTOM COMMIT INSPECTION PANEL (Files + Diff Viewer) */}
-          {selectedCommit && (
-            <div
-              style={{ height: `${bottomHeight}px` }}
-              className="bg-[#1c1c1f] flex shrink-0 text-xs overflow-hidden"
-            >
-              {/* Left Column: Commit Summary & Changed Files List / Tree */}
+            {/* VERTICAL RESIZER HANDLE */}
+            {selectedCommit && (
               <div
-                style={{ width: `${fileListWidth}px` }}
-                className="flex flex-col shrink-0 overflow-hidden"
+                onMouseDown={handleVerticalResize}
+                className="h-1.5 w-full bg-zinc-800 hover:bg-sky-500 active:bg-sky-400 cursor-row-resize shrink-0 transition-colors z-20"
+                title="Arrastra para redimensionar el panel"
+              />
+            )}
+
+            {/* BOTTOM COMMIT INSPECTION PANEL */}
+            {selectedCommit && (
+              <div
+                style={{ height: `${bottomHeight}px` }}
+                className="bg-[#1c1c1f] flex shrink-0 text-xs overflow-hidden"
               >
-                {/* Commit Meta Header */}
-                <div className="p-2.5 border-b border-zinc-800/80 bg-[#1e1e22] shrink-0">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-amber-400 font-semibold text-[11px]">
-                      {selectedCommit.short_hash}
-                    </span>
-                    <div className="flex items-center text-zinc-400 text-[10px] space-x-1">
-                      <Clock size={11} />
-                      <span>{formatDate(selectedCommit.timestamp)}</span>
+                {/* Left Column: Commit Summary & Changed Files */}
+                <div
+                  style={{ width: `${fileListWidth}px` }}
+                  className="flex flex-col shrink-0 overflow-hidden"
+                >
+                  <div className="p-2.5 border-b border-zinc-800/80 bg-[#1e1e22] shrink-0">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-amber-400 font-semibold text-[11px]">
+                        {selectedCommit.short_hash}
+                      </span>
+                      <div className="flex items-center text-zinc-400 text-[10px] space-x-1">
+                        <Clock size={11} />
+                        <span>{formatDate(selectedCommit.timestamp)}</span>
+                      </div>
                     </div>
+                    <div className="mt-0.5 flex items-center text-zinc-300 text-[10px] space-x-1">
+                      <User size={10} className="text-zinc-400" />
+                      <span className="font-medium truncate">{selectedCommit.author_name}</span>
+                    </div>
+                    <p className="mt-1 text-zinc-200 font-medium text-[11px] line-clamp-1">
+                      {selectedCommit.summary}
+                    </p>
                   </div>
-                  <div className="mt-0.5 flex items-center text-zinc-300 text-[10px] space-x-1">
-                    <User size={10} className="text-zinc-400" />
-                    <span className="font-medium truncate">{selectedCommit.author_name}</span>
+
+                  <div className="flex-1 overflow-hidden">
+                    <FileTree
+                      files={commitFiles}
+                      selectedFile={selectedFile}
+                      onSelectFile={(f) => setSelectedFile(f)}
+                      loading={loadingFiles}
+                    />
                   </div>
-                  <p className="mt-1 text-zinc-200 font-medium text-[11px] line-clamp-1">
-                    {selectedCommit.summary}
-                  </p>
                 </div>
 
-                {/* File Tree / List Component */}
-                <div className="flex-1 overflow-hidden">
-                  <FileTree
-                    files={commitFiles}
-                    selectedFile={selectedFile}
-                    onSelectFile={(f) => setSelectedFile(f)}
-                    loading={loadingFiles}
+                {/* HORIZONTAL RESIZER HANDLE */}
+                <div
+                  onMouseDown={handleHorizontalResize}
+                  className="w-1.5 h-full bg-zinc-800 hover:bg-sky-500 active:bg-sky-400 cursor-col-resize shrink-0 transition-colors z-20"
+                  title="Arrastra para redimensionar el ancho de archivos"
+                />
+
+                {/* Right Column: Unified Diff Viewer */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <DiffViewer
+                    diffText={diffText}
+                    loading={loadingDiff}
+                    filePath={selectedFile?.path}
                   />
                 </div>
               </div>
-
-              {/* HORIZONTAL RESIZER HANDLE (between Files Column & Diff Viewer) */}
-              <div
-                onMouseDown={handleHorizontalResize}
-                className="w-1.5 h-full bg-zinc-800 hover:bg-sky-500 active:bg-sky-400 cursor-col-resize shrink-0 transition-colors z-20"
-                title="Arrastra para redimensionar el ancho de archivos"
-              />
-
-              {/* Right Column: Unified Diff Viewer */}
-              <div className="flex-1 flex flex-col overflow-hidden">
-                <DiffViewer
-                  diffText={diffText}
-                  loading={loadingDiff}
-                  filePath={selectedFile?.path}
-                />
-              </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

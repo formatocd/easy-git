@@ -2,7 +2,9 @@ mod git;
 mod graph;
 mod models;
 
-use models::{Branch, Commit, CommitWithGraph, FileChange, RepoSummary};
+use models::{
+    Branch, Commit, CommitWithGraph, FileChange, RepoSummary, WorkingTreeStatus,
+};
 
 #[tauri::command]
 fn is_git_repo(path: String) -> bool {
@@ -48,6 +50,60 @@ fn get_commit_file_diff(
     git::get_commit_file_diff(&path, &hash, parent_hash.as_deref(), &file_path)
 }
 
+#[tauri::command]
+fn get_working_tree_status(path: String) -> Result<WorkingTreeStatus, String> {
+    git::get_working_tree_status(&path)
+}
+
+#[tauri::command]
+fn get_working_file_diff(
+    path: String,
+    file_path: String,
+    is_staged: bool,
+) -> Result<String, String> {
+    git::get_working_file_diff(&path, &file_path, is_staged)
+}
+
+#[tauri::command]
+fn stage_file(path: String, file_path: String) -> Result<(), String> {
+    git::stage_file(&path, &file_path)
+}
+
+#[tauri::command]
+fn unstage_file(path: String, file_path: String) -> Result<(), String> {
+    git::unstage_file(&path, &file_path)
+}
+
+#[tauri::command]
+fn stage_all(path: String) -> Result<(), String> {
+    git::stage_all(&path)
+}
+
+#[tauri::command]
+fn unstage_all(path: String) -> Result<(), String> {
+    git::unstage_all(&path)
+}
+
+#[tauri::command]
+fn stage_files(path: String, file_paths: Vec<String>) -> Result<(), String> {
+    git::stage_files(&path, file_paths)
+}
+
+#[tauri::command]
+fn unstage_files(path: String, file_paths: Vec<String>) -> Result<(), String> {
+    git::unstage_files(&path, file_paths)
+}
+
+#[tauri::command]
+fn discard_file_changes(path: String, file_path: String) -> Result<(), String> {
+    git::discard_file_changes(&path, &file_path)
+}
+
+#[tauri::command]
+fn commit_changes(path: String, message: String, amend: bool) -> Result<String, String> {
+    git::commit_changes(&path, &message, amend)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -60,7 +116,17 @@ pub fn run() {
             get_commit_graph,
             get_branches,
             get_commit_files,
-            get_commit_file_diff
+            get_commit_file_diff,
+            get_working_tree_status,
+            get_working_file_diff,
+            stage_file,
+            unstage_file,
+            stage_all,
+            unstage_all,
+            stage_files,
+            unstage_files,
+            discard_file_changes,
+            commit_changes
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

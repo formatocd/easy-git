@@ -56,6 +56,18 @@ export interface FileChange {
   old_path?: string | null;
 }
 
+export interface WorkingFile {
+  path: string;
+  status: string; // "M" | "A" | "D" | "R" | "?"
+  is_staged: boolean;
+  old_path?: string | null;
+}
+
+export interface WorkingTreeStatus {
+  staged: WorkingFile[];
+  unstaged: WorkingFile[];
+}
+
 export async function isGitRepo(path: string): Promise<boolean> {
   return invoke<boolean>("is_git_repo", { path });
 }
@@ -100,4 +112,56 @@ export async function getCommitFileDiff(
     filePath,
     parentHash: parentHash || null,
   });
+}
+
+export async function getWorkingTreeStatus(path: string): Promise<WorkingTreeStatus> {
+  return invoke<WorkingTreeStatus>("get_working_tree_status", { path });
+}
+
+export async function getWorkingFileDiff(
+  path: string,
+  filePath: string,
+  isStaged: boolean,
+): Promise<string> {
+  return invoke<string>("get_working_file_diff", {
+    path,
+    filePath,
+    isStaged,
+  });
+}
+
+export async function stageFile(path: string, filePath: string): Promise<void> {
+  return invoke<void>("stage_file", { path, filePath });
+}
+
+export async function unstageFile(path: string, filePath: string): Promise<void> {
+  return invoke<void>("unstage_file", { path, filePath });
+}
+
+export async function stageAll(path: string): Promise<void> {
+  return invoke<void>("stage_all", { path });
+}
+
+export async function unstageAll(path: string): Promise<void> {
+  return invoke<void>("unstage_all", { path });
+}
+
+export async function stageFiles(path: string, filePaths: string[]): Promise<void> {
+  return invoke<void>("stage_files", { path, filePaths });
+}
+
+export async function unstageFiles(path: string, filePaths: string[]): Promise<void> {
+  return invoke<void>("unstage_files", { path, filePaths });
+}
+
+export async function discardFileChanges(path: string, filePath: string): Promise<void> {
+  return invoke<void>("discard_file_changes", { path, filePath });
+}
+
+export async function commitChanges(
+  path: string,
+  message: string,
+  amend: boolean,
+): Promise<string> {
+  return invoke<string>("commit_changes", { path, message, amend });
 }
