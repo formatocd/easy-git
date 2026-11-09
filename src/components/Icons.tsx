@@ -143,9 +143,22 @@ export const List: React.FC<IconProps> = ({ size = 16, className = "" }) => (
   </svg>
 );
 
-export const FolderTree: React.FC<IconProps> = ({ size = 16, className = "" }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M20 10c0-4.4-3.6-8-8-8s-8 3.6-8 8 3.6 8 8 8h8" />
-    <polyline points="16 14 20 18 16 22" />
+// Clarity Tree View Solid Icon
+export const TreeViewSolid: React.FC<IconProps> = ({ size = 16, className = "" }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 36 36"
+    fill="currentColor"
+    className={className}
+  >
+    {/* Parent node */}
+    <rect x="4" y="2" width="10" height="9" rx="1.5" />
+    {/* Child 1 node */}
+    <rect x="22" y="14" width="10" height="9" rx="1.5" />
+    {/* Child 2 node */}
+    <rect x="22" y="25" width="10" height="9" rx="1.5" />
+    {/* Branching tree connector lines */}
+    <path d="M7.5 11v18.5a1 1 0 0 0 1 1H22v-2.5H10V20H22v-2.5H10V11z" />
   </svg>
 );

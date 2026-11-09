@@ -7,7 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   List,
-  FolderTree,
+  TreeViewSolid,
 } from "./Icons";
 
 interface FileTreeProps {
@@ -69,7 +69,6 @@ export const FileTree: React.FC<FileTreeProps> = ({
     };
 
     for (const file of files) {
-      // Normalize slashes
       const parts = file.path.replace(/\\/g, "/").split("/");
       let current = root;
 
@@ -79,7 +78,6 @@ export const FileTree: React.FC<FileTreeProps> = ({
         const currentPath = parts.slice(0, i + 1).join("/");
 
         if (isLast) {
-          // File node
           current.children.set(part, {
             name: part,
             fullPath: file.path,
@@ -88,7 +86,6 @@ export const FileTree: React.FC<FileTreeProps> = ({
             children: new Map(),
           });
         } else {
-          // Folder node
           if (!current.children.has(part)) {
             current.children.set(part, {
               name: part,
@@ -105,7 +102,6 @@ export const FileTree: React.FC<FileTreeProps> = ({
     return root;
   }, [files]);
 
-  // Recursive renderer for tree nodes
   function renderTreeNode(node: TreeNode, depth: number = 0): React.ReactNode {
     const sortedChildren = Array.from(node.children.values()).sort((a, b) => {
       if (a.isFolder && !b.isFolder) return -1;
@@ -139,7 +135,6 @@ export const FileTree: React.FC<FileTreeProps> = ({
           </div>
         );
       } else {
-        // File
         const isSelected = selectedFile?.path === child.fullPath;
         return (
           <div
@@ -172,22 +167,22 @@ export const FileTree: React.FC<FileTreeProps> = ({
           {loading && <span className="text-zinc-500 text-[10px] mr-2">Cargando...</span>}
           <button
             onClick={() => setViewMode("tree")}
-            title="Vista de árbol"
-            className={`p-1 rounded cursor-pointer ${
+            title="Vista de árbol jerárquico"
+            className={`p-1 rounded cursor-pointer transition ${
               viewMode === "tree"
                 ? "bg-zinc-700 text-sky-300"
-                : "text-zinc-500 hover:text-zinc-300"
+                : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
             }`}
           >
-            <FolderTree size={13} />
+            <TreeViewSolid size={13} />
           </button>
           <button
             onClick={() => setViewMode("list")}
             title="Vista de lista plana"
-            className={`p-1 rounded cursor-pointer ${
+            className={`p-1 rounded cursor-pointer transition ${
               viewMode === "list"
                 ? "bg-zinc-700 text-sky-300"
-                : "text-zinc-500 hover:text-zinc-300"
+                : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50"
             }`}
           >
             <List size={13} />
