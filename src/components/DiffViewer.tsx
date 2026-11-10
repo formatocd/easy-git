@@ -11,6 +11,7 @@ interface ParsedLine {
   oldLine: number | null;
   newLine: number | null;
   content: string;
+  lineLabel?: string;
 }
 
 function parseDiff(rawDiff: string): ParsedLine[] {
@@ -21,19 +22,42 @@ function parseDiff(rawDiff: string): ParsedLine[] {
   let curNewLine = 0;
   let insideHunks = false;
 
-  const hunkRegex = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/;
+  const hunkRegex = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)/;
 
   for (const line of rawLines) {
     const hunkMatch = line.match(hunkRegex);
     if (hunkMatch) {
       insideHunks = true;
-      curOldLine = parseInt(hunkMatch[1], 10);
-      curNewLine = parseInt(hunkMatch[2], 10);
+      const oldStart = parseInt(hunkMatch[1], 10);
+      const oldCount = hunkMatch[2] !== undefined ? parseInt(hunkMatch[2], 10) : 1;
+      const newStart = parseInt(hunkMatch[3], 10);
+      const newCount = hunkMatch[4] !== undefined ? parseInt(hunkMatch[4], 10) : 1;
+
+      curOldLine = oldStart;
+      curNewLine = newStart;
+
+      let startLine: number;
+      let endLine: number;
+
+      if (newCount > 0) {
+        startLine = newStart;
+        endLine = newStart + newCount - 1;
+      } else if (oldCount > 0) {
+        startLine = oldStart;
+        endLine = oldStart + oldCount - 1;
+      } else {
+        startLine = newStart;
+        endLine = newStart;
+      }
+
+      const lineLabel = `Lines ${startLine} - ${endLine}`;
+
       result.push({
         type: "chunk",
-        oldLine: null,
-        newLine: null,
+        oldLine: oldStart,
+        newLine: newStart,
         content: line,
+        lineLabel,
       });
       continue;
     }
@@ -88,7 +112,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500 text-xs">
-        <span>Cargando diferencias...</span>
+        <span>Loading diff...</span>
       </div>
     );
   }
@@ -96,7 +120,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
   if (!filePath) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500 text-xs">
-        <span>Selecciona un archivo modificado de la lista para ver sus cambios.</span>
+        <span>Select a modified file from the list to view its changes.</span>
       </div>
     );
   }
@@ -104,7 +128,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
   if (!diffText || parsedLines.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500 text-xs">
-        <span>No hay diferencias de texto o el archivo es binario.</span>
+        <span>No text differences or file is binary.</span>
       </div>
     );
   }
@@ -113,7 +137,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
     <div className="h-full flex flex-col overflow-hidden bg-[#121214] font-mono text-[11px]">
       <div className="flex items-center justify-between px-3 py-1 bg-[#18181b] border-b border-zinc-800 text-[11px] text-zinc-400 shrink-0">
         <span className="font-medium text-zinc-200 truncate">{filePath}</span>
-        <span className="text-[10px] text-zinc-500">{parsedLines.length} líneas</span>
+        <span className="text-[10px] text-zinc-500">{parsedLines.length} lines</span>
       </div>
 
       <div className="flex-1 overflow-auto select-text font-mono">
@@ -122,9 +146,30 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
             return (
               <div
                 key={idx}
-                className="flex items-center px-2 py-0.5 bg-sky-950/40 text-sky-400 border-y border-sky-900/40 font-semibold italic text-[10px] my-0.5 select-none"
+                className="flex items-center leading-[22px] bg-[#161d2a] text-zinc-300 border-y border-sky-900/40 my-1 select-none font-mono text-[11px]"
               >
-                <span>{line.content}</span>
+                {/* Dual Line number gutter continuation */}
+                <div className="w-10 shrink-0 text-center text-zinc-600 select-none text-[10px] border-r border-zinc-800/80 bg-[#141416]/70">
+                  ···
+                </div>
+                <div className="w-10 shrink-0 text-center text-zinc-600 select-none text-[10px] border-r border-zinc-800/80 bg-[#141416]/70">
+                  ···
+                </div>
+
+                {/* Section indicator spacer */}
+                <div className="w-4 shrink-0 text-center text-sky-400 font-bold text-[10px] select-none">
+                  §
+                </div>
+
+                {/* Simplified Chunk Content: ONLY "Lines {startLine} - {endLine}" with no bounding box */}
+                <div className="flex-1 flex items-center pl-1.5 py-0.5 overflow-hidden">
+                  <span
+                    className="text-sky-400 font-semibold text-[11px] select-none cursor-help"
+                    title={`Original Git header:\n${line.content}`}
+                  >
+                    {line.lineLabel}
+                  </span>
+                </div>
               </div>
             );
           }

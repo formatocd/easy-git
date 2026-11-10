@@ -54,3 +54,17 @@ pub struct FileChange {
     pub status: String, // "M", "A", "D", "R"
     pub old_path: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkingFile {
+    pub path: String,
+    pub status: String, // "M", "A", "D", "R", "?"
+    pub is_staged: bool,
+    pub old_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkingTreeStatus {
+    pub staged: Vec<WorkingFile>,
+    pub unstaged: Vec<WorkingFile>,
+}
