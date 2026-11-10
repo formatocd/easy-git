@@ -11,6 +11,8 @@ interface ParsedLine {
   oldLine: number | null;
   newLine: number | null;
   content: string;
+  chunkContext?: string;
+  lineLabel?: string;
 }
 
 function parseDiff(rawDiff: string): ParsedLine[] {
@@ -21,19 +23,27 @@ function parseDiff(rawDiff: string): ParsedLine[] {
   let curNewLine = 0;
   let insideHunks = false;
 
-  const hunkRegex = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)/;
+  const hunkRegex = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)/;
 
   for (const line of rawLines) {
     const hunkMatch = line.match(hunkRegex);
     if (hunkMatch) {
       insideHunks = true;
-      curOldLine = parseInt(hunkMatch[1], 10);
-      curNewLine = parseInt(hunkMatch[2], 10);
+      const oldStart = parseInt(hunkMatch[1], 10);
+      const newStart = parseInt(hunkMatch[2], 10);
+      curOldLine = oldStart;
+      curNewLine = newStart;
+
+      const context = (hunkMatch[3] || "").trim();
+      const lineLabel = newStart > 0 ? `Línea ${newStart}` : `Línea ${oldStart}`;
+
       result.push({
         type: "chunk",
-        oldLine: null,
-        newLine: null,
+        oldLine: oldStart,
+        newLine: newStart,
         content: line,
+        chunkContext: context,
+        lineLabel,
       });
       continue;
     }
@@ -122,9 +132,38 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
             return (
               <div
                 key={idx}
-                className="flex items-center px-2 py-0.5 bg-sky-950/40 text-sky-400 border-y border-sky-900/40 font-semibold italic text-[10px] my-0.5 select-none"
+                className="flex items-center leading-[22px] bg-[#161d2a] text-zinc-300 border-y border-sky-900/40 my-1 select-none font-mono text-[11px]"
               >
-                <span>{line.content}</span>
+                {/* Dual Line number gutter continuation */}
+                <div className="w-10 shrink-0 text-center text-zinc-600 select-none text-[10px] border-r border-zinc-800/80 bg-[#141416]/70">
+                  ···
+                </div>
+                <div className="w-10 shrink-0 text-center text-zinc-600 select-none text-[10px] border-r border-zinc-800/80 bg-[#141416]/70">
+                  ···
+                </div>
+
+                {/* Section indicator spacer */}
+                <div className="w-4 shrink-0 text-center text-sky-400 font-bold text-[10px] select-none">
+                  §
+                </div>
+
+                {/* Simplified Chunk Content */}
+                <div className="flex-1 flex items-center space-x-2 pl-1 py-0.5 overflow-hidden">
+                  <span
+                    className="px-1.5 py-0.5 rounded bg-sky-950 border border-sky-800/60 text-sky-300 font-semibold text-[10px] shrink-0 cursor-help"
+                    title={`Cabecera original Git:\n${line.content}`}
+                  >
+                    {line.lineLabel}
+                  </span>
+                  {line.chunkContext && (
+                    <span
+                      className="text-zinc-300 text-[11px] font-mono truncate"
+                      title={line.chunkContext}
+                    >
+                      {line.chunkContext}
+                    </span>
+                  )}
+                </div>
               </div>
             );
           }
