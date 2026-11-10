@@ -425,7 +425,7 @@ pub fn get_working_file_diff(
                 }
                 Ok(diff)
             }
-            Err(_) => Ok("Archivo nuevo o binario sin vista previa de texto.".to_string()),
+            Err(_) => Ok("New or binary file without text preview.".to_string()),
         }
     }
 }

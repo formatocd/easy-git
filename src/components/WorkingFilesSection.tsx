@@ -318,7 +318,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
                       e.stopPropagation();
                       onBatchAction(folderFiles.map((f) => f.path));
                     }}
-                    title="Despreparar carpeta completa"
+                    title="Unstage folder"
                     className="p-0.5 rounded text-zinc-400 hover:text-rose-300 hover:bg-rose-950/40 cursor-pointer"
                   >
                     <Minus size={11} />
@@ -329,7 +329,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
                       e.stopPropagation();
                       onBatchAction(folderFiles.map((f) => f.path));
                     }}
-                    title="Preparar carpeta completa"
+                    title="Stage folder"
                     className="p-0.5 rounded text-zinc-400 hover:text-emerald-300 hover:bg-emerald-950/40 cursor-pointer"
                   >
                     <Plus size={11} />
@@ -377,7 +377,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
               {onDiscardSingle && (
                 <button
                   onClick={(e) => onDiscardSingle(file, e)}
-                  title="Descartar cambios"
+                  title="Discard changes"
                   className="p-0.5 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-950/40 cursor-pointer"
                 >
                   <Trash2 size={11} />
@@ -386,7 +386,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
               {isStaged && onUnstageSingle && (
                 <button
                   onClick={(e) => onUnstageSingle(file, e)}
-                  title="Despreparar archivo"
+                  title="Unstage file"
                   className="p-0.5 rounded text-zinc-500 hover:text-rose-300 hover:bg-rose-950/40 cursor-pointer"
                 >
                   <Minus size={11} />
@@ -395,7 +395,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
               {!isStaged && onStageSingle && (
                 <button
                   onClick={(e) => onStageSingle(file, e)}
-                  title="Preparar archivo (Stage)"
+                  title="Stage file"
                   className="p-0.5 rounded text-zinc-500 hover:text-emerald-300 hover:bg-emerald-950/40 cursor-pointer"
                 >
                   <Plus size={11} />
@@ -422,7 +422,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
               type="checkbox"
               checked={selectedPaths.size > 0 && selectedPaths.size === files.length}
               onChange={handleMasterCheckboxToggle}
-              title="Seleccionar/Deseleccionar todos"
+              title="Select/Deselect all"
               className="rounded bg-zinc-800 border-zinc-700 text-sky-500 cursor-pointer"
             />
           )}
@@ -439,7 +439,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
           <div className="flex items-center bg-zinc-800/80 rounded p-0.5 border border-zinc-700/50 mr-1">
             <button
               onClick={() => setViewMode("tree")}
-              title="Vista de árbol jerárquico"
+              title="Hierarchical tree view"
               className={`p-0.5 rounded cursor-pointer transition ${
                 viewMode === "tree" ? "bg-zinc-700 text-sky-300" : "text-zinc-500 hover:text-zinc-300"
               }`}
@@ -448,7 +448,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
             </button>
             <button
               onClick={() => setViewMode("list")}
-              title="Vista de lista plana"
+              title="Flat list view"
               className={`p-0.5 rounded cursor-pointer transition ${
                 viewMode === "list" ? "bg-zinc-700 text-sky-300" : "text-zinc-500 hover:text-zinc-300"
               }`}
@@ -490,7 +490,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
       <div className="flex-1 overflow-y-auto p-1 space-y-0.5">
         {files.length === 0 ? (
           <div className="p-4 text-center text-zinc-500 text-[11px]">
-            {isStaged ? "Ningún archivo preparado para el commit." : "Árbol de trabajo limpio."}
+            {isStaged ? "No files staged for commit." : "Working tree clean."}
           </div>
         ) : viewMode === "tree" ? (
           renderTreeNode(treeRoot)
@@ -528,7 +528,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
                   {onDiscardSingle && (
                     <button
                       onClick={(e) => onDiscardSingle(file, e)}
-                      title="Descartar cambios"
+                      title="Discard changes"
                       className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-950/40 cursor-pointer"
                     >
                       <Trash2 size={12} />
@@ -537,7 +537,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
                   {isStaged && onUnstageSingle && (
                     <button
                       onClick={(e) => onUnstageSingle(file, e)}
-                      title="Despreparar archivo"
+                      title="Unstage file"
                       className="p-1 rounded text-zinc-500 hover:text-rose-300 hover:bg-rose-950/40 cursor-pointer"
                     >
                       <Minus size={12} />
@@ -546,7 +546,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
                   {!isStaged && onStageSingle && (
                     <button
                       onClick={(e) => onStageSingle(file, e)}
-                      title="Preparar archivo (Stage)"
+                      title="Stage file"
                       className="p-1 rounded text-zinc-500 hover:text-emerald-300 hover:bg-emerald-950/40 cursor-pointer"
                     >
                       <Plus size={12} />

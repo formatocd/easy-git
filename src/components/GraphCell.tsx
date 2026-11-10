@@ -21,7 +21,7 @@ interface GraphCellProps {
 }
 
 const LANE_WIDTH = 16;
-const ROW_HEIGHT = 32;
+const ROW_HEIGHT = 26;
 const OFFSET_X = 12;
 
 export const GraphCell: React.FC<GraphCellProps> = ({
@@ -100,10 +100,10 @@ export const GraphCell: React.FC<GraphCellProps> = ({
       <circle
         cx={nodeX}
         cy={midY}
-        r={isSelected ? 5.5 : 4.5}
+        r={isSelected ? 5 : 4}
         fill={nodeColor}
         stroke="#18181b"
-        strokeWidth={isSelected ? 2.5 : 2}
+        strokeWidth={isSelected ? 2 : 1.5}
       />
     </svg>
   );

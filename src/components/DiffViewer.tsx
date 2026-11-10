@@ -11,7 +11,6 @@ interface ParsedLine {
   oldLine: number | null;
   newLine: number | null;
   content: string;
-  chunkContext?: string;
   lineLabel?: string;
 }
 
@@ -23,26 +22,41 @@ function parseDiff(rawDiff: string): ParsedLine[] {
   let curNewLine = 0;
   let insideHunks = false;
 
-  const hunkRegex = /^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)/;
+  const hunkRegex = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)/;
 
   for (const line of rawLines) {
     const hunkMatch = line.match(hunkRegex);
     if (hunkMatch) {
       insideHunks = true;
       const oldStart = parseInt(hunkMatch[1], 10);
-      const newStart = parseInt(hunkMatch[2], 10);
+      const oldCount = hunkMatch[2] !== undefined ? parseInt(hunkMatch[2], 10) : 1;
+      const newStart = parseInt(hunkMatch[3], 10);
+      const newCount = hunkMatch[4] !== undefined ? parseInt(hunkMatch[4], 10) : 1;
+
       curOldLine = oldStart;
       curNewLine = newStart;
 
-      const context = (hunkMatch[3] || "").trim();
-      const lineLabel = newStart > 0 ? `Línea ${newStart}` : `Línea ${oldStart}`;
+      let startLine: number;
+      let endLine: number;
+
+      if (newCount > 0) {
+        startLine = newStart;
+        endLine = newStart + newCount - 1;
+      } else if (oldCount > 0) {
+        startLine = oldStart;
+        endLine = oldStart + oldCount - 1;
+      } else {
+        startLine = newStart;
+        endLine = newStart;
+      }
+
+      const lineLabel = `Lines ${startLine} - ${endLine}`;
 
       result.push({
         type: "chunk",
         oldLine: oldStart,
         newLine: newStart,
         content: line,
-        chunkContext: context,
         lineLabel,
       });
       continue;
@@ -98,7 +112,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500 text-xs">
-        <span>Cargando diferencias...</span>
+        <span>Loading diff...</span>
       </div>
     );
   }
@@ -106,7 +120,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
   if (!filePath) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500 text-xs">
-        <span>Selecciona un archivo modificado de la lista para ver sus cambios.</span>
+        <span>Select a modified file from the list to view its changes.</span>
       </div>
     );
   }
@@ -114,7 +128,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
   if (!diffText || parsedLines.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-zinc-500 text-xs">
-        <span>No hay diferencias de texto o el archivo es binario.</span>
+        <span>No text differences or file is binary.</span>
       </div>
     );
   }
@@ -123,7 +137,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
     <div className="h-full flex flex-col overflow-hidden bg-[#121214] font-mono text-[11px]">
       <div className="flex items-center justify-between px-3 py-1 bg-[#18181b] border-b border-zinc-800 text-[11px] text-zinc-400 shrink-0">
         <span className="font-medium text-zinc-200 truncate">{filePath}</span>
-        <span className="text-[10px] text-zinc-500">{parsedLines.length} líneas</span>
+        <span className="text-[10px] text-zinc-500">{parsedLines.length} lines</span>
       </div>
 
       <div className="flex-1 overflow-auto select-text font-mono">
@@ -147,22 +161,14 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
                   §
                 </div>
 
-                {/* Simplified Chunk Content */}
-                <div className="flex-1 flex items-center space-x-2 pl-1 py-0.5 overflow-hidden">
+                {/* Simplified Chunk Content: ONLY "Lines {startLine} - {endLine}" with no bounding box */}
+                <div className="flex-1 flex items-center pl-1.5 py-0.5 overflow-hidden">
                   <span
-                    className="px-1.5 py-0.5 rounded bg-sky-950 border border-sky-800/60 text-sky-300 font-semibold text-[10px] shrink-0 cursor-help"
-                    title={`Cabecera original Git:\n${line.content}`}
+                    className="text-sky-400 font-semibold text-[11px] select-none cursor-help"
+                    title={`Original Git header:\n${line.content}`}
                   >
                     {line.lineLabel}
                   </span>
-                  {line.chunkContext && (
-                    <span
-                      className="text-zinc-300 text-[11px] font-mono truncate"
-                      title={line.chunkContext}
-                    >
-                      {line.chunkContext}
-                    </span>
-                  )}
                 </div>
               </div>
             );

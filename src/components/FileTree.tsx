@@ -161,13 +161,13 @@ export const FileTree: React.FC<FileTreeProps> = ({
       {/* Subheader with View Toggle */}
       <div className="px-3 py-1 bg-[#18181b] border-b border-zinc-800/60 flex items-center justify-between text-[11px] text-zinc-400 shrink-0">
         <span className="font-medium">
-          Archivos ({files.length})
+          Files ({files.length})
         </span>
         <div className="flex items-center space-x-1">
-          {loading && <span className="text-zinc-500 text-[10px] mr-2">Cargando...</span>}
+          {loading && <span className="text-zinc-500 text-[10px] mr-2">Loading...</span>}
           <button
             onClick={() => setViewMode("tree")}
-            title="Vista de árbol jerárquico"
+            title="Hierarchical tree view"
             className={`p-1 rounded cursor-pointer transition ${
               viewMode === "tree"
                 ? "bg-zinc-700 text-sky-300"
@@ -178,7 +178,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
           </button>
           <button
             onClick={() => setViewMode("list")}
-            title="Vista de lista plana"
+            title="Flat list view"
             className={`p-1 rounded cursor-pointer transition ${
               viewMode === "list"
                 ? "bg-zinc-700 text-sky-300"
@@ -194,7 +194,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
       <div className="flex-1 overflow-y-auto p-1 space-y-0.5">
         {files.length === 0 && !loading && (
           <div className="p-3 text-center text-zinc-500 text-[11px]">
-            No hay archivos modificados en este commit.
+            No modified files in this commit.
           </div>
         )}
 

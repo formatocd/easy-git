@@ -98,7 +98,7 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
         }
       } catch (err) {
         if (!isCancelled) {
-          setDiffText("Error al cargar las diferencias.");
+          setDiffText("Error loading diff.");
         }
       } finally {
         if (!isCancelled) setLoadingDiff(false);
@@ -177,12 +177,12 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
     let confirmed = false;
     try {
       confirmed = await ask(
-        `¿Estás seguro de que deseas descartar todos los cambios en '${file.path}'?\nEsta acción es irreversible.`,
+        `Are you sure you want to discard all changes in '${file.path}'?\nThis action cannot be undone.`,
         {
-          title: "Descartar cambios",
+          title: "Discard Changes",
           kind: "warning",
-          okLabel: "Descartar cambios",
-          cancelLabel: "Cancelar",
+          okLabel: "Discard changes",
+          cancelLabel: "Cancel",
         }
       );
     } catch (dialogErr) {
@@ -204,12 +204,12 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
 
   async function handleCommit() {
     if (!commitMessage.trim()) {
-      setErrorMsg("El mensaje del commit no puede estar vacío.");
+      setErrorMsg("Commit message cannot be empty.");
       return;
     }
 
     if (status.staged.length === 0 && !isAmend) {
-      setErrorMsg("No hay ningún archivo preparado (staged) para el commit.");
+      setErrorMsg("No staged files for commit.");
       return;
     }
 
@@ -221,7 +221,7 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
       await commitChanges(repoPath, commitMessage, isAmend);
       setCommitMessage("");
       setIsAmend(false);
-      setSuccessMsg("¡Commit realizado con éxito!");
+      setSuccessMsg("Commit created successfully!");
       await refreshStatus();
       onCommitSuccess();
       setTimeout(() => setSuccessMsg(null), 3500);
@@ -274,7 +274,7 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
 
         {/* 1. STAGED FILES SECTION */}
         <WorkingFilesSection
-          title="Archivos Preparados"
+          title="Staged Files"
           colorDotClass="bg-emerald-400"
           files={status.staged}
           isStaged={true}
@@ -282,14 +282,14 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
           onSelectFile={(f) => setSelectedFile(f)}
           onUnstageSingle={handleUnstage}
           onBatchAction={handleUnstageBatch}
-          batchActionLabel="Despreparar"
+          batchActionLabel="Unstage"
           onAllAction={handleUnstageAll}
-          allActionLabel="Despreparar todo"
+          allActionLabel="Unstage all"
         />
 
         {/* 2. UNSTAGED FILES SECTION */}
         <WorkingFilesSection
-          title="Archivos No Preparados"
+          title="Unstaged Files"
           colorDotClass="bg-amber-400"
           files={status.unstaged}
           isStaged={false}
@@ -298,9 +298,9 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
           onStageSingle={handleStage}
           onDiscardSingle={handleDiscard}
           onBatchAction={handleStageBatch}
-          batchActionLabel="Preparar"
+          batchActionLabel="Stage"
           onAllAction={handleStageAll}
-          allActionLabel="Preparar todo"
+          allActionLabel="Stage all"
         />
 
         {/* 3. COMMIT MESSAGE & SUBMIT BOX */}
@@ -308,7 +308,7 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
           <textarea
             value={commitMessage}
             onChange={(e) => setCommitMessage(e.target.value)}
-            placeholder="Mensaje del commit (título y descripción opcional)..."
+            placeholder="Commit message (title and optional description)..."
             rows={3}
             className="w-full bg-[#141416] border border-zinc-800 rounded p-2 text-xs text-zinc-100 placeholder-zinc-500 resize-none outline-none focus:border-sky-500 transition"
           />
@@ -321,7 +321,7 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
                 onChange={(e) => setIsAmend(e.target.checked)}
                 className="rounded bg-zinc-800 border-zinc-700 text-sky-500 focus:ring-0"
               />
-              <span>Enmendar último commit (Amend)</span>
+              <span>Amend last commit</span>
             </label>
 
             <button
@@ -336,9 +336,9 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
               <GitCommit size={14} />
               <span>
                 {isCommitting
-                  ? "Confirmando..."
+                  ? "Committing..."
                   : isAmend
-                  ? "Enmendar Commit"
+                  ? "Amend Commit"
                   : `Commit (${status.staged.length})`}
               </span>
             </button>
@@ -350,7 +350,7 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
       <div
         onMouseDown={handleHorizontalResize}
         className="w-1.5 h-full bg-zinc-800 hover:bg-sky-500 active:bg-sky-400 cursor-col-resize shrink-0 transition-colors z-20"
-        title="Arrastra para redimensionar el panel"
+        title="Drag to resize panel"
       />
 
       {/* RIGHT: LIVE DIFF VIEWER */}
@@ -360,7 +360,7 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
           loading={loadingDiff}
           filePath={
             selectedFile
-              ? `${selectedFile.path} (${selectedFile.is_staged ? "Preparado / Staged" : "Sin preparar / Unstaged"})`
+              ? `${selectedFile.path} (${selectedFile.is_staged ? "Staged" : "Unstaged"})`
               : null
           }
         />

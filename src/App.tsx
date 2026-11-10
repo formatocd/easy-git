@@ -30,6 +30,7 @@ import {
   User,
   FileDiff,
   Layers,
+  Copy,
 } from "./components/Icons";
 import "./App.css";
 
@@ -50,9 +51,14 @@ function App() {
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [loadingDiff, setLoadingDiff] = useState(false);
 
-  // Resizable panel sizes
-  const [bottomHeight, setBottomHeight] = useState(280);
-  const [fileListWidth, setFileListWidth] = useState(280);
+  // Resizable panel sizes configured to match the user's layout by default:
+  // - bottomHeightPercent: 50% (50/50 vertical split between commits table and bottom panels)
+  // - fileListPercent: 42% (horizontal split: left column for commit info/files vs right for diff viewer)
+  // - commitInfoPercent: 40% (vertical split inside left column: commit info vs file tree)
+  const [bottomHeightPercent, setBottomHeightPercent] = useState<number>(50);
+  const [fileListPercent, setFileListPercent] = useState<number>(42);
+  const [commitInfoPercent, setCommitInfoPercent] = useState<number>(40);
+  const [copiedHash, setCopiedHash] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +66,7 @@ function App() {
   function formatDate(timestamp: number) {
     if (!timestamp) return "—";
     const date = new Date(timestamp * 1000);
-    return date.toLocaleDateString(undefined, {
+    return date.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -106,7 +112,7 @@ function App() {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "Selecciona un repositorio Git",
+        title: "Select a Git repository",
       });
 
       if (selected && typeof selected === "string") {
@@ -183,7 +189,7 @@ function App() {
       } catch (err) {
         if (!isCancelled) {
           console.error("Error loading diff:", err);
-          setDiffText("Error al cargar las diferencias del archivo.");
+          setDiffText("Error loading file diff.");
         }
       } finally {
         if (!isCancelled) setLoadingDiff(false);
@@ -211,12 +217,15 @@ function App() {
   const handleVerticalResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const startY = e.clientY;
-    const startHeight = bottomHeight;
+    const startPercent = bottomHeightPercent;
+    const parentEl = (e.currentTarget.parentElement as HTMLElement);
+    const totalHeight = parentEl ? parentEl.clientHeight : (window.innerHeight - 50);
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       const deltaY = startY - moveEvent.clientY;
-      const newHeight = Math.max(120, Math.min(window.innerHeight * 0.75, startHeight + deltaY));
-      setBottomHeight(newHeight);
+      const deltaPercent = (deltaY / totalHeight) * 100;
+      const newPercent = Math.max(15, Math.min(85, startPercent + deltaPercent));
+      setBottomHeightPercent(newPercent);
     };
 
     const onMouseUp = () => {
@@ -226,17 +235,20 @@ function App() {
 
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
-  }, [bottomHeight]);
+  }, [bottomHeightPercent]);
 
   const handleHorizontalResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     const startX = e.clientX;
-    const startWidth = fileListWidth;
+    const startPercent = fileListPercent;
+    const parentEl = (e.currentTarget.parentElement as HTMLElement);
+    const totalWidth = parentEl ? parentEl.clientWidth : (window.innerWidth - 224);
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       const deltaX = moveEvent.clientX - startX;
-      const newWidth = Math.max(160, Math.min(600, startWidth + deltaX));
-      setFileListWidth(newWidth);
+      const deltaPercent = (deltaX / totalWidth) * 100;
+      const newPercent = Math.max(20, Math.min(75, startPercent + deltaPercent));
+      setFileListPercent(newPercent);
     };
 
     const onMouseUp = () => {
@@ -246,7 +258,36 @@ function App() {
 
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("mouseup", onMouseUp);
-  }, [fileListWidth]);
+  }, [fileListPercent]);
+
+  const handleCommitInfoResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startPercent = commitInfoPercent;
+    const parentEl = (e.currentTarget.parentElement as HTMLElement);
+    const totalHeight = parentEl ? parentEl.clientHeight : 300;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const deltaY = moveEvent.clientY - startY;
+      const deltaPercent = (deltaY / totalHeight) * 100;
+      const newPercent = Math.max(15, Math.min(85, startPercent + deltaPercent));
+      setCommitInfoPercent(newPercent);
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  }, [commitInfoPercent]);
+
+  const handleCopyHash = (hash: string) => {
+    navigator.clipboard.writeText(hash);
+    setCopiedHash(true);
+    setTimeout(() => setCopiedHash(false), 2000);
+  };
 
   const localBranches = branches.filter((b) => !b.is_remote);
   const remoteBranches = branches.filter((b) => b.is_remote);
@@ -266,7 +307,7 @@ function App() {
             className="flex items-center space-x-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium rounded transition cursor-pointer"
           >
             <FolderOpen size={15} className="text-sky-400" />
-            <span>Abrir Repo</span>
+            <span>Open Repo</span>
           </button>
 
           <div className="h-4 w-px bg-zinc-700 mx-1" />
@@ -294,7 +335,7 @@ function App() {
           </button>
           <button className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer">
             <GitBranch size={14} className="text-purple-400" />
-            <span>Rama</span>
+            <span>Branch</span>
           </button>
           <button className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer">
             <GitPullRequest size={14} className="text-pink-400" />
@@ -318,15 +359,15 @@ function App() {
             <div
               onClick={() => setActiveView("working_copy")}
               className="flex items-center space-x-1 cursor-pointer"
-              title="Haz clic para ver los cambios y preparar commit"
+              title="Click to view changes and stage commit"
             >
               {summary.is_clean ? (
                 <span className="flex items-center text-emerald-400 text-[11px] bg-emerald-950/60 border border-emerald-800 px-2 py-0.5 rounded">
-                  <CheckCircle2 size={11} className="mr-1" /> Limpio
+                  <CheckCircle2 size={11} className="mr-1" /> Clean
                 </span>
               ) : (
                 <span className="flex items-center text-amber-400 text-[11px] bg-amber-950/60 border border-amber-800 px-2 py-0.5 rounded hover:bg-amber-900/60 transition">
-                  <AlertCircle size={11} className="mr-1" /> Cambios pendientes
+                  <AlertCircle size={11} className="mr-1" /> Pending changes
                 </span>
               )}
             </div>
@@ -339,13 +380,13 @@ function App() {
         {/* LEFT SIDEBAR (SourceTree Style) */}
         <aside className="w-56 bg-[#1b1b1e] border-r border-zinc-800 flex flex-col shrink-0 text-xs">
           <div className="p-3 border-b border-zinc-800/80 font-semibold text-zinc-400 uppercase tracking-wider text-[10px]">
-            Explorador
+            Explorer
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-4">
             {/* WORKSPACE SECTION (SourceTree File Status vs History) */}
             <div>
               <div className="text-zinc-500 font-semibold px-2 py-1 text-[10px] uppercase tracking-wider">
-                Espacio de Trabajo
+                Workspace
               </div>
               <ul className="mt-0.5 space-y-0.5">
                 <li
@@ -358,7 +399,7 @@ function App() {
                 >
                   <span className="flex items-center space-x-2">
                     <FileDiff size={14} className="text-amber-400" />
-                    <span>Estado archivos</span>
+                    <span>File Status</span>
                   </span>
                   {summary && !summary.is_clean && (
                     <span className="w-2 h-2 rounded-full bg-amber-400" />
@@ -374,7 +415,7 @@ function App() {
                   }`}
                 >
                   <Layers size={14} className="text-sky-400" />
-                  <span>Historial</span>
+                  <span>History</span>
                 </li>
               </ul>
             </div>
@@ -384,7 +425,7 @@ function App() {
               <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1">
                 <span className="flex items-center space-x-1.5">
                   <GitBranch size={13} className="text-purple-400" />
-                  <span>Ramas Locales ({localBranches.length})</span>
+                  <span>Local Branches ({localBranches.length})</span>
                 </span>
               </div>
               <ul className="mt-1 space-y-0.5">
@@ -410,7 +451,7 @@ function App() {
                 <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1">
                   <span className="flex items-center space-x-1.5">
                     <Tag size={13} className="text-zinc-400" />
-                    <span>Remotas ({remoteBranches.length})</span>
+                    <span>Remote ({remoteBranches.length})</span>
                   </span>
                 </div>
                 <ul className="mt-1 space-y-0.5">
@@ -444,16 +485,16 @@ function App() {
               </div>
             )}
 
-            {/* COMMIT GRAPH TABLE */}
-            <div className="flex-1 overflow-auto">
+            {/* COMMIT GRAPH TABLE (Occupies remaining vertical space, 50% by default) */}
+            <div className="flex-1 min-h-0 overflow-auto">
               <table className="w-full border-collapse text-left text-xs table-fixed">
                 <thead className="sticky top-0 bg-[#1e1e22] text-zinc-400 border-b border-zinc-800 z-10 text-[11px]">
                   <tr>
-                    <th className="py-2 px-3 font-semibold w-24">Grafo</th>
-                    <th className="py-2 px-3 font-semibold">Descripción</th>
-                    <th className="py-2 px-3 font-semibold w-20">Hash</th>
-                    <th className="py-2 px-3 font-semibold w-36">Autor</th>
-                    <th className="py-2 px-3 font-semibold w-36">Fecha</th>
+                    <th className="py-1 px-3 font-semibold w-24">Graph</th>
+                    <th className="py-1 px-3 font-semibold">Description</th>
+                    <th className="py-1 px-3 font-semibold w-20">Hash</th>
+                    <th className="py-1 px-3 font-semibold w-36">Author</th>
+                    <th className="py-1 px-3 font-semibold w-36">Date</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800/40 font-normal">
@@ -468,7 +509,7 @@ function App() {
                             ? "bg-blue-600/20 text-white"
                             : "hover:bg-zinc-800/50 text-zinc-300"
                         }`}
-                        style={{ height: "32px" }}
+                        style={{ height: "26px" }}
                       >
                         {/* Grafo SVG */}
                         <td className="p-0 align-middle">
@@ -482,12 +523,12 @@ function App() {
                         </td>
 
                         {/* Mensaje + Badges de Ramas */}
-                        <td className="py-1.5 px-3 truncate font-medium">
+                        <td className="py-0.5 px-3 truncate font-medium">
                           <div className="flex items-center space-x-1.5 overflow-hidden">
                             {c.refs.map((ref) => (
                               <span
                                 key={ref}
-                                className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold shrink-0 ${
+                                className={`text-[9px] px-1.5 py-0.2 rounded-full font-semibold shrink-0 ${
                                   ref.includes("HEAD")
                                     ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
                                     : ref.includes("origin/")
@@ -503,17 +544,17 @@ function App() {
                         </td>
 
                         {/* Hash */}
-                        <td className="py-1.5 px-3 font-mono text-zinc-400 text-[11px]">
+                        <td className="py-0.5 px-3 font-mono text-zinc-400 text-[11px]">
                           {c.short_hash}
                         </td>
 
                         {/* Autor */}
-                        <td className="py-1.5 px-3 truncate text-zinc-400">
+                        <td className="py-0.5 px-3 truncate text-zinc-400 text-[11px]">
                           {c.author_name}
                         </td>
 
                         {/* Fecha */}
-                        <td className="py-1.5 px-3 text-zinc-500 text-[11px] truncate">
+                        <td className="py-0.5 px-3 text-zinc-500 text-[11px] truncate">
                           {formatDate(c.timestamp)}
                         </td>
                       </tr>
@@ -523,46 +564,122 @@ function App() {
               </table>
             </div>
 
-            {/* VERTICAL RESIZER HANDLE */}
+            {/* VERTICAL RESIZER HANDLE (between commits table and bottom panel) */}
             {selectedCommit && (
               <div
                 onMouseDown={handleVerticalResize}
                 className="h-1.5 w-full bg-zinc-800 hover:bg-sky-500 active:bg-sky-400 cursor-row-resize shrink-0 transition-colors z-20"
-                title="Arrastra para redimensionar el panel"
+                title="Drag to resize bottom panel"
               />
             )}
 
-            {/* BOTTOM COMMIT INSPECTION PANEL */}
+            {/* BOTTOM COMMIT INSPECTION PANEL (Default 50% vertical space, adjustable) */}
             {selectedCommit && (
               <div
-                style={{ height: `${bottomHeight}px` }}
+                style={{ height: `${bottomHeightPercent}%` }}
                 className="bg-[#1c1c1f] flex shrink-0 text-xs overflow-hidden"
               >
-                {/* Left Column: Commit Summary & Changed Files */}
+                {/* Left Column: Commit Detailed Info & Changed Files (~42% default width) */}
                 <div
-                  style={{ width: `${fileListWidth}px` }}
-                  className="flex flex-col shrink-0 overflow-hidden"
+                  style={{ width: `${fileListPercent}%` }}
+                  className="flex flex-col h-full shrink-0 overflow-hidden"
                 >
-                  <div className="p-2.5 border-b border-zinc-800/80 bg-[#1e1e22] shrink-0">
-                    <div className="flex items-center justify-between">
-                      <span className="font-mono text-amber-400 font-semibold text-[11px]">
-                        {selectedCommit.short_hash}
-                      </span>
-                      <div className="flex items-center text-zinc-400 text-[10px] space-x-1">
-                        <Clock size={11} />
+                  {/* TOP SUB-PANEL: COMMIT DETAILED INFORMATION (~40% default height) */}
+                  <div
+                    style={{ height: `${commitInfoPercent}%` }}
+                    className="flex flex-col shrink-0 overflow-y-auto min-h-0 bg-[#1e1e22] p-2.5 space-y-2 select-text border-b border-zinc-800/80"
+                  >
+                    {/* Header row: Full hash & Date */}
+                    <div className="flex items-start justify-between gap-1.5">
+                      <div className="flex items-center space-x-1.5 min-w-0 flex-1">
+                        <span
+                          onClick={() => handleCopyHash(selectedCommit.hash)}
+                          className="font-mono text-amber-400 font-semibold text-[11px] truncate cursor-pointer hover:underline hover:text-amber-300 transition"
+                          title="Click to copy full Hash"
+                        >
+                          {selectedCommit.hash}
+                        </span>
+                        {copiedHash ? (
+                          <span className="text-[9px] text-emerald-400 font-sans font-medium px-1 rounded bg-emerald-950/60 border border-emerald-800/60 shrink-0">
+                            Copied!
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => handleCopyHash(selectedCommit.hash)}
+                            className="text-zinc-500 hover:text-zinc-300 p-0.5 rounded cursor-pointer shrink-0"
+                            title="Copy Hash"
+                          >
+                            <Copy size={11} />
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex items-center text-zinc-400 text-[10px] space-x-1 shrink-0">
+                        <Clock size={11} className="text-zinc-500" />
                         <span>{formatDate(selectedCommit.timestamp)}</span>
                       </div>
                     </div>
-                    <div className="mt-0.5 flex items-center text-zinc-300 text-[10px] space-x-1">
-                      <User size={10} className="text-zinc-400" />
-                      <span className="font-medium truncate">{selectedCommit.author_name}</span>
+
+                    {/* Author row: Name & Email */}
+                    <div className="flex items-center space-x-1.5 text-[11px]">
+                      <User size={12} className="text-zinc-400 shrink-0" />
+                      <span className="font-semibold text-zinc-200">{selectedCommit.author_name}</span>
+                      {selectedCommit.author_email && (
+                        <span className="text-zinc-400 font-mono text-[10px] truncate">
+                          &lt;{selectedCommit.author_email}&gt;
+                        </span>
+                      )}
                     </div>
-                    <p className="mt-1 text-zinc-200 font-medium text-[11px] line-clamp-1">
+
+                    {/* Parent commits row (if any) - without surrounding box */}
+                    {selectedCommit.parents.length > 0 && (
+                      <div className="flex items-center space-x-1 text-[10px]">
+                        <span className="text-zinc-500 font-semibold uppercase tracking-wider text-[9px]">
+                          # Parents:
+                        </span>
+                        <div className="flex flex-wrap gap-1">
+                          {selectedCommit.parents.map((parentHash) => {
+                            const shortP = parentHash.length >= 7 ? parentHash.slice(0, 7) : parentHash;
+                            const parentCommit = commits.find((c) => c.hash.startsWith(shortP) || parentHash.startsWith(c.hash));
+                            return (
+                              <button
+                                key={parentHash}
+                                onClick={() => {
+                                  if (parentCommit) setSelectedCommit(parentCommit);
+                                }}
+                                className="text-sky-400 hover:text-sky-300 hover:underline font-mono text-[10px] cursor-pointer transition mr-1.5"
+                                title={parentCommit ? `Jump to parent commit: ${parentCommit.summary}` : parentHash}
+                              >
+                                {shortP}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Commit Subject / Summary */}
+                    <div className="font-semibold text-zinc-100 text-[11px] leading-snug">
                       {selectedCommit.summary}
-                    </p>
+                    </div>
+
+                    {/* Commit Description / Body (if present) */}
+                    {selectedCommit.body && (
+                      <div className="text-zinc-300 text-[11px] font-normal leading-relaxed whitespace-pre-wrap pt-1 border-t border-zinc-800/60">
+                        {selectedCommit.body}
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex-1 overflow-hidden">
+                  {/* HORIZONTAL RESIZER BETWEEN COMMIT INFO & FILE TREE */}
+                  <div
+                    onMouseDown={handleCommitInfoResize}
+                    className="h-1.5 w-full bg-zinc-800 hover:bg-sky-500 active:bg-sky-400 cursor-row-resize shrink-0 transition-colors z-10"
+                    title="Drag to resize commit info and files"
+                  />
+
+                  {/* BOTTOM SUB-PANEL: FILE TREE (~60% default height) */}
+                  <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                     <FileTree
                       files={commitFiles}
                       selectedFile={selectedFile}
@@ -572,15 +689,15 @@ function App() {
                   </div>
                 </div>
 
-                {/* HORIZONTAL RESIZER HANDLE */}
+                {/* HORIZONTAL RESIZER HANDLE (between Left Column and Diff Viewer) */}
                 <div
                   onMouseDown={handleHorizontalResize}
                   className="w-1.5 h-full bg-zinc-800 hover:bg-sky-500 active:bg-sky-400 cursor-col-resize shrink-0 transition-colors z-20"
-                  title="Arrastra para redimensionar el ancho de archivos"
+                  title="Drag to resize files width"
                 />
 
                 {/* Right Column: Unified Diff Viewer */}
-                <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
                   <DiffViewer
                     diffText={diffText}
                     loading={loadingDiff}
