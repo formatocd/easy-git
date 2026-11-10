@@ -24,11 +24,13 @@ import { ask } from "@tauri-apps/plugin-dialog";
 interface WorkingCopyViewProps {
   repoPath: string;
   onCommitSuccess: () => void;
+  onStatusChange?: () => void;
 }
 
 export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
   repoPath,
   onCommitSuccess,
+  onStatusChange,
 }) => {
   const [status, setStatus] = useState<WorkingTreeStatus>({ staged: [], unstaged: [] });
   const [selectedFile, setSelectedFile] = useState<WorkingFile | null>(null);
@@ -50,6 +52,7 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
       setErrorMsg(null);
       const res = await getWorkingTreeStatus(repoPath);
       setStatus(res);
+      onStatusChange?.();
 
       // Select file: preferred > previous > first available
       const allFiles = [...res.staged, ...res.unstaged];

@@ -15,6 +15,7 @@ import { GraphCell } from "./components/GraphCell";
 import { DiffViewer } from "./components/DiffViewer";
 import { FileTree } from "./components/FileTree";
 import { WorkingCopyView } from "./components/WorkingCopyView";
+import { BranchTree } from "./components/BranchTree";
 import {
   FolderOpen,
   GitBranch,
@@ -31,6 +32,7 @@ import {
   FileDiff,
   Layers,
   Copy,
+  Cloud,
 } from "./components/Icons";
 import "./App.css";
 
@@ -93,7 +95,8 @@ function App() {
       setRepoPath(path);
 
       if (repoCommits.length > 0) {
-        setSelectedCommit(repoCommits[0]);
+        const firstRealCommit = repoCommits.find((c) => c.hash !== "uncommitted") || null;
+        setSelectedCommit(firstRealCommit);
       } else {
         setSelectedCommit(null);
         setCommitFiles([]);
@@ -213,6 +216,28 @@ function App() {
     setActiveView("history");
   };
 
+  const handleSwitchToHistory = useCallback(async () => {
+    setActiveView("history");
+    if (!repoPath) return;
+    try {
+      const [repoSummary, repoCommits] = await Promise.all([
+        openRepository(repoPath),
+        getCommitGraph(repoPath, 100),
+      ]);
+      setSummary(repoSummary);
+      setCommits(repoCommits);
+      setSelectedCommit((prev) => {
+        if (!prev || prev.hash === "uncommitted") {
+          return repoCommits.find((c) => c.hash !== "uncommitted") || null;
+        }
+        const exists = repoCommits.find((c) => c.hash === prev.hash);
+        return exists || repoCommits.find((c) => c.hash !== "uncommitted") || null;
+      });
+    } catch (err) {
+      console.error("Error refreshing history:", err);
+    }
+  }, [repoPath]);
+
   // Drag handlers for resizable panels in History view
   const handleVerticalResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -288,6 +313,24 @@ function App() {
     setCopiedHash(true);
     setTimeout(() => setCopiedHash(false), 2000);
   };
+
+  const handleSelectBranch = useCallback(
+    (branch: Branch) => {
+      setActiveView("history");
+      if (branch.target_hash) {
+        const matchingCommit = commits.find(
+          (c) =>
+            c.hash === branch.target_hash ||
+            c.hash.startsWith(branch.target_hash) ||
+            branch.target_hash.startsWith(c.hash)
+        );
+        if (matchingCommit) {
+          setSelectedCommit(matchingCommit);
+        }
+      }
+    },
+    [commits]
+  );
 
   const localBranches = branches.filter((b) => !b.is_remote);
   const remoteBranches = branches.filter((b) => b.is_remote);
@@ -407,7 +450,7 @@ function App() {
                 </li>
 
                 <li
-                  onClick={() => setActiveView("history")}
+                  onClick={handleSwitchToHistory}
                   className={`flex items-center space-x-2 px-2 py-1.5 rounded cursor-pointer transition ${
                     activeView === "history"
                       ? "bg-sky-600/20 text-sky-300 font-semibold border-l-2 border-sky-400"
@@ -428,21 +471,12 @@ function App() {
                   <span>Local Branches ({localBranches.length})</span>
                 </span>
               </div>
-              <ul className="mt-1 space-y-0.5">
-                {localBranches.map((b) => (
-                  <li
-                    key={b.name}
-                    onClick={() => setActiveView("history")}
-                    className={`flex items-center px-2 py-1 rounded cursor-pointer transition ${
-                      b.is_current
-                        ? "bg-purple-600/20 text-purple-300 font-semibold border-l-2 border-purple-400"
-                        : "text-zinc-300 hover:bg-zinc-800"
-                    }`}
-                  >
-                    <span className="truncate">{b.name}</span>
-                  </li>
-                ))}
-              </ul>
+              <div className="mt-1">
+                <BranchTree
+                  branches={localBranches}
+                  onSelectBranch={handleSelectBranch}
+                />
+              </div>
             </div>
 
             {/* REMOTE BRANCHES */}
@@ -450,21 +484,17 @@ function App() {
               <div>
                 <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1">
                   <span className="flex items-center space-x-1.5">
-                    <Tag size={13} className="text-zinc-400" />
+                    <Cloud size={13} className="text-sky-400" />
                     <span>Remote ({remoteBranches.length})</span>
                   </span>
                 </div>
-                <ul className="mt-1 space-y-0.5">
-                  {remoteBranches.map((b) => (
-                    <li
-                      key={b.name}
-                      onClick={() => setActiveView("history")}
-                      className="flex items-center px-2 py-1 text-zinc-400 hover:bg-zinc-800 rounded cursor-pointer transition"
-                    >
-                      <span className="truncate">{b.name}</span>
-                    </li>
-                  ))}
-                </ul>
+                <div className="mt-1">
+                  <BranchTree
+                    branches={remoteBranches}
+                    onSelectBranch={handleSelectBranch}
+                    isRemote={true}
+                  />
+                </div>
               </div>
             )}
           </div>
@@ -475,6 +505,11 @@ function App() {
           <WorkingCopyView
             repoPath={repoPath}
             onCommitSuccess={handleCommitSuccess}
+            onStatusChange={() => {
+              if (repoPath) {
+                openRepository(repoPath).then(setSummary);
+              }
+            }}
           />
         ) : (
           /* HISTORY GRAPH VIEW */
@@ -499,14 +534,23 @@ function App() {
                 </thead>
                 <tbody className="divide-y divide-zinc-800/40 font-normal">
                   {commits.map((c) => {
+                    const isUncommitted = c.hash === "uncommitted";
                     const isSelected = selectedCommit?.hash === c.hash;
                     return (
                       <tr
                         key={c.hash}
-                        onClick={() => setSelectedCommit(c)}
+                        onClick={() => {
+                          if (isUncommitted) {
+                            setActiveView("working_copy");
+                          } else {
+                            setSelectedCommit(c);
+                          }
+                        }}
                         className={`cursor-pointer transition-colors ${
                           isSelected
                             ? "bg-blue-600/20 text-white"
+                            : isUncommitted
+                            ? "hover:bg-amber-950/20 text-amber-300"
                             : "hover:bg-zinc-800/50 text-zinc-300"
                         }`}
                         style={{ height: "26px" }}
@@ -519,43 +563,53 @@ function App() {
                             max_col={c.max_col}
                             segments={c.segments}
                             isSelected={isSelected}
+                            isUncommitted={isUncommitted}
                           />
                         </td>
 
                         {/* Mensaje + Badges de Ramas */}
                         <td className="py-0.5 px-3 truncate font-medium">
                           <div className="flex items-center space-x-1.5 overflow-hidden">
-                            {c.refs.map((ref) => (
-                              <span
-                                key={ref}
-                                className={`text-[9px] px-1.5 py-0.2 rounded-full font-semibold shrink-0 ${
-                                  ref.includes("HEAD")
-                                    ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
-                                    : ref.includes("origin/")
-                                    ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
-                                    : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                                }`}
-                              >
-                                {ref}
+                            {isUncommitted ? (
+                              <span className="font-semibold text-amber-400 italic flex items-center space-x-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0" />
+                                <span>Uncommitted changes</span>
                               </span>
-                            ))}
-                            <span className="truncate">{c.summary}</span>
+                            ) : (
+                              <>
+                                {c.refs.map((ref) => (
+                                  <span
+                                    key={ref}
+                                    className={`text-[9px] px-1.5 py-0.2 rounded-full font-semibold shrink-0 ${
+                                      ref.includes("HEAD")
+                                        ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
+                                        : ref.includes("origin/")
+                                        ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                                        : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                                    }`}
+                                  >
+                                    {ref}
+                                  </span>
+                                ))}
+                                <span className="truncate">{c.summary}</span>
+                              </>
+                            )}
                           </div>
                         </td>
 
                         {/* Hash */}
                         <td className="py-0.5 px-3 font-mono text-zinc-400 text-[11px]">
-                          {c.short_hash}
+                          {isUncommitted ? "—" : c.short_hash}
                         </td>
 
                         {/* Autor */}
                         <td className="py-0.5 px-3 truncate text-zinc-400 text-[11px]">
-                          {c.author_name}
+                          {isUncommitted ? "—" : c.author_name}
                         </td>
 
                         {/* Fecha */}
                         <td className="py-0.5 px-3 text-zinc-500 text-[11px] truncate">
-                          {formatDate(c.timestamp)}
+                          {isUncommitted ? "—" : formatDate(c.timestamp)}
                         </td>
                       </tr>
                     );

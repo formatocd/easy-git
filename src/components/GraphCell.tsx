@@ -18,6 +18,7 @@ interface GraphCellProps {
   max_col: number;
   segments: GraphSegment[];
   isSelected?: boolean;
+  isUncommitted?: boolean;
 }
 
 const LANE_WIDTH = 16;
@@ -30,6 +31,7 @@ export const GraphCell: React.FC<GraphCellProps> = ({
   max_col,
   segments,
   isSelected,
+  isUncommitted,
 }) => {
   const width = Math.max(48, (max_col + 2) * LANE_WIDTH + OFFSET_X);
   const midY = ROW_HEIGHT / 2;
@@ -97,14 +99,34 @@ export const GraphCell: React.FC<GraphCellProps> = ({
       })}
 
       {/* 2. Draw Commit Node (circle) */}
-      <circle
-        cx={nodeX}
-        cy={midY}
-        r={isSelected ? 5 : 4}
-        fill={nodeColor}
-        stroke="#18181b"
-        strokeWidth={isSelected ? 2 : 1.5}
-      />
+      {isUncommitted ? (
+        <>
+          <circle
+            cx={nodeX}
+            cy={midY}
+            r={5}
+            fill="#18181b"
+            stroke="#f59e0b"
+            strokeWidth={2}
+            strokeDasharray="2.5 2"
+          />
+          <circle
+            cx={nodeX}
+            cy={midY}
+            r={1.8}
+            fill="#f59e0b"
+          />
+        </>
+      ) : (
+        <circle
+          cx={nodeX}
+          cy={midY}
+          r={isSelected ? 5 : 4}
+          fill={nodeColor}
+          stroke="#18181b"
+          strokeWidth={isSelected ? 2 : 1.5}
+        />
+      )}
     </svg>
   );
 };
