@@ -187,13 +187,15 @@ pub fn get_branches(path: &str) -> Result<Vec<Branch>, String> {
         }
 
         let is_current = parts[0].trim() == "*";
-        let name = parts[1].trim().to_string();
+        let mut name = parts[1].trim().to_string();
         let full_ref = parts[2].trim();
         let target_hash = parts[3].trim().to_string();
         let is_remote = full_ref.starts_with("refs/remotes/");
 
-        if name.ends_with("/HEAD") {
-            continue;
+        if is_remote {
+            if let Some(stripped) = full_ref.strip_prefix("refs/remotes/") {
+                name = stripped.to_string();
+            }
         }
 
         branches.push(Branch {
@@ -207,8 +209,43 @@ pub fn get_branches(path: &str) -> Result<Vec<Branch>, String> {
     Ok(branches)
 }
 
+pub fn get_head_hash(path: &str) -> Result<String, String> {
+    let output = create_git_command(path)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|e| format!("Failed to get HEAD hash: {}", e))?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
 pub fn get_commits_with_graph(path: &str, limit: Option<usize>) -> Result<Vec<CommitWithGraph>, String> {
-    let commits = get_commits(path, limit)?;
+    let mut commits = get_commits(path, limit)?;
+
+    if !commits.is_empty() {
+        if let Ok(summary) = get_repo_summary(path) {
+            if !summary.is_clean {
+                if let Ok(head_hash) = get_head_hash(path) {
+                    let uncommitted = Commit {
+                        hash: "uncommitted".to_string(),
+                        short_hash: "—".to_string(),
+                        parents: vec![head_hash],
+                        author_name: "—".to_string(),
+                        author_email: "".to_string(),
+                        timestamp: 0,
+                        summary: "Uncommitted changes".to_string(),
+                        body: "".to_string(),
+                        refs: vec![],
+                    };
+                    commits.insert(0, uncommitted);
+                }
+            }
+        }
+    }
+
     Ok(crate::graph::compute_graph(commits))
 }
 
@@ -219,6 +256,10 @@ pub fn get_commit_files(
 ) -> Result<Vec<FileChange>, String> {
     if !is_git_repo(path) {
         return Err(format!("'{}' is not a Git repository", path));
+    }
+
+    if hash == "uncommitted" {
+        return Ok(Vec::new());
     }
 
     let mut cmd = create_git_command(path);
@@ -280,6 +321,10 @@ pub fn get_commit_file_diff(
 ) -> Result<String, String> {
     if !is_git_repo(path) {
         return Err(format!("'{}' is not a Git repository", path));
+    }
+
+    if hash == "uncommitted" {
+        return Ok(String::new());
     }
 
     let mut cmd = create_git_command(path);
