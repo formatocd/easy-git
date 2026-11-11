@@ -6,7 +6,8 @@ use std::process::Command;
 use std::os::windows::process::CommandExt;
 
 use crate::models::{
-    Branch, Commit, CommitWithGraph, FileChange, RepoSummary, WorkingFile, WorkingTreeStatus,
+    AheadBehind, Branch, Commit, CommitWithGraph, FileChange, RemoteInfo, RepoSummary, WorkingFile,
+    WorkingTreeStatus,
 };
 
 #[cfg(windows)]
@@ -97,7 +98,7 @@ pub fn get_commits(path: &str, limit: Option<usize>) -> Result<Vec<Commit>, Stri
         if stderr.contains("does not have any commits yet") || stderr.contains("unknown revision") {
             return Ok(Vec::new());
         }
-        return Err(format!("Git log error: {}", stderr.trim()));
+        return Err(stderr.to_string());
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -109,34 +110,41 @@ pub fn get_commits(path: &str, limit: Option<usize>) -> Result<Vec<Commit>, Stri
             continue;
         }
 
-        let parts: Vec<&str> = record.split('\x00').collect();
-        if parts.len() < 8 {
+        let fields: Vec<&str> = record.split('\x00').collect();
+        if fields.len() < 7 {
             continue;
         }
 
-        let hash = parts[0].trim().to_string();
-        let short_hash = if hash.len() >= 7 {
-            hash[..7].to_string()
+        let hash = fields[0].trim().to_string();
+        let short_hash = if hash.len() >= 7 { hash[..7].to_string() } else { hash.clone() };
+
+        let parents_str = fields[1].trim();
+        let parents = if parents_str.is_empty() {
+            Vec::new()
         } else {
-            hash.clone()
+            parents_str.split_whitespace().map(|s| s.to_string()).collect()
         };
 
-        let parents: Vec<String> = parts[1]
-            .split_whitespace()
-            .map(|s| s.to_string())
-            .collect();
+        let author_name = fields[2].trim().to_string();
+        let author_email = fields[3].trim().to_string();
+        let timestamp = fields[4].trim().parse::<i64>().unwrap_or(0);
+        let summary = fields[5].trim().to_string();
+        let body = fields[6].trim().to_string();
 
-        let author_name = parts[2].trim().to_string();
-        let author_email = parts[3].trim().to_string();
-        let timestamp: i64 = parts[4].trim().parse().unwrap_or(0);
-        let summary = parts[5].trim().to_string();
-        let body = parts[6].trim().to_string();
-
-        let refs: Vec<String> = parts[7]
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let refs = if fields.len() > 7 {
+            let ref_str = fields[7].trim();
+            if ref_str.is_empty() {
+                Vec::new()
+            } else {
+                ref_str
+                    .split(',')
+                    .map(|r| r.trim().to_string())
+                    .filter(|r| !r.is_empty())
+                    .collect()
+            }
+        } else {
+            Vec::new()
+        };
 
         commits.push(Commit {
             hash,
@@ -159,12 +167,14 @@ pub fn get_branches(path: &str) -> Result<Vec<Branch>, String> {
         return Err(format!("'{}' is not a Git repository", path));
     }
 
-    let output = create_git_command(path)
-        .args([
-            "branch",
-            "-a",
-            "--format=%(HEAD)%00%(refname:short)%00%(refname)%00%(objectname)",
-        ])
+    let mut cmd = create_git_command(path);
+    let args = [
+        "branch",
+        "-a",
+        "--format=%(HEAD)%00%(refname:short)%00%(refname)%00%(objectname)",
+    ];
+    let output = cmd
+        .args(args)
         .output()
         .map_err(|e| format!("Failed to execute git branch: {}", e))?;
 
@@ -288,12 +298,16 @@ pub fn get_commit_files(
             continue;
         }
 
-        let raw_status = parts[0].trim();
-        let status = if raw_status.starts_with('R') {
-            "R".to_string()
-        } else {
-            raw_status.to_string()
-        };
+        let raw_status = parts[0];
+        let status_code = raw_status.chars().next().unwrap_or('M').to_string();
+
+        let status = match status_code.as_str() {
+            "A" => "A",
+            "D" => "D",
+            "R" => "R",
+            _ => "M",
+        }
+        .to_string();
 
         if status == "R" && parts.len() >= 3 {
             files.push(FileChange {
@@ -488,20 +502,16 @@ pub fn stage_file(repo_path: &str, file_path: &str) -> Result<(), String> {
 }
 
 pub fn unstage_file(repo_path: &str, file_path: &str) -> Result<(), String> {
-    // Try restore --staged first, fallback to reset HEAD
-    let output = create_git_command(repo_path)
-        .args(["restore", "--staged", "--", file_path])
-        .output()
-        .map_err(|e| format!("Failed to unstage file: {}", e))?;
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["restore", "--staged", "--", file_path]);
 
+    let output = cmd.output().map_err(|e| format!("Failed to unstage file: {}", e))?;
     if !output.status.success() {
-        let fallback = create_git_command(repo_path)
-            .args(["reset", "HEAD", "--", file_path])
-            .output()
-            .map_err(|e| format!("Failed to reset file: {}", e))?;
-
-        if !fallback.status.success() {
-            return Err(String::from_utf8_lossy(&fallback.stderr).to_string());
+        let mut fallback = create_git_command(repo_path);
+        fallback.args(["reset", "HEAD", "--", file_path]);
+        let fb_output = fallback.output().map_err(|e| format!("Failed to reset file: {}", e))?;
+        if !fb_output.status.success() {
+            return Err(String::from_utf8_lossy(&fb_output.stderr).to_string());
         }
     }
     Ok(())
@@ -520,19 +530,16 @@ pub fn stage_all(repo_path: &str) -> Result<(), String> {
 }
 
 pub fn unstage_all(repo_path: &str) -> Result<(), String> {
-    let output = create_git_command(repo_path)
-        .args(["restore", "--staged", "."])
-        .output()
-        .map_err(|e| format!("Failed to unstage all: {}", e))?;
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["restore", "--staged", "."]);
 
+    let output = cmd.output().map_err(|e| format!("Failed to unstage all files: {}", e))?;
     if !output.status.success() {
-        let fallback = create_git_command(repo_path)
-            .args(["reset"])
-            .output()
-            .map_err(|e| format!("Failed to reset: {}", e))?;
-
-        if !fallback.status.success() {
-            return Err(String::from_utf8_lossy(&fallback.stderr).to_string());
+        let mut fallback = create_git_command(repo_path);
+        fallback.args(["reset", "HEAD"]);
+        let fb_output = fallback.output().map_err(|e| format!("Failed to reset HEAD: {}", e))?;
+        if !fb_output.status.success() {
+            return Err(String::from_utf8_lossy(&fb_output.stderr).to_string());
         }
     }
     Ok(())
@@ -543,7 +550,7 @@ pub fn stage_files(repo_path: &str, file_paths: Vec<String>) -> Result<(), Strin
         return Ok(());
     }
     let mut cmd = create_git_command(repo_path);
-    cmd.arg("add").arg("--");
+    cmd.args(["add", "--"]);
     for p in &file_paths {
         cmd.arg(p);
     }
@@ -579,39 +586,67 @@ pub fn unstage_files(repo_path: &str, file_paths: Vec<String>) -> Result<(), Str
 }
 
 pub fn discard_file_changes(repo_path: &str, file_path: &str) -> Result<(), String> {
-    let tracked_check = create_git_command(repo_path)
-        .args(["ls-files", "--error-unmatch", "--", file_path])
-        .output();
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
 
-    let is_tracked = match tracked_check {
-        Ok(out) => out.status.success(),
-        Err(_) => false,
-    };
+    let full_path = Path::new(repo_path).join(file_path);
 
-    if is_tracked {
+    // Check if file exists in HEAD
+    let in_head = create_git_command(repo_path)
+        .args(["cat-file", "-e", &format!("HEAD:{}", file_path)])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+
+    if in_head {
+        // First try to restore staged and worktree to HEAD
+        let res = create_git_command(repo_path)
+            .args(["checkout", "HEAD", "--", file_path])
+            .output();
+
+        if let Ok(out) = res {
+            if out.status.success() {
+                return Ok(());
+            }
+        }
+
+        // Fallback: restore staged then restore worktree
+        let _ = create_git_command(repo_path)
+            .args(["restore", "--staged", "--", file_path])
+            .output();
+
         let output = create_git_command(repo_path)
             .args(["restore", "--", file_path])
             .output()
             .map_err(|e| format!("Failed to restore file: {}", e))?;
 
         if !output.status.success() {
-            let fallback = create_git_command(repo_path)
-                .args(["checkout", "--", file_path])
-                .output()
-                .map_err(|e| format!("Failed to checkout file: {}", e))?;
-
-            if !fallback.status.success() {
-                return Err(String::from_utf8_lossy(&fallback.stderr).to_string());
-            }
+            return Err(String::from_utf8_lossy(&output.stderr).to_string());
         }
     } else {
-        // Untracked: remove file from disk
-        let full_path = Path::new(repo_path).join(file_path);
+        // Does not exist in HEAD (untracked or newly added staged file)
+        let _ = create_git_command(repo_path)
+            .args(["rm", "-f", "--cached", "--", file_path])
+            .output();
+
         if full_path.is_file() {
-            fs::remove_file(&full_path).map_err(|e| format!("Failed to delete file: {}", e))?;
+            let _ = fs::remove_file(&full_path);
         } else if full_path.is_dir() {
-            fs::remove_dir_all(&full_path).map_err(|e| format!("Failed to delete folder: {}", e))?;
+            let _ = fs::remove_dir_all(&full_path);
         }
+    }
+
+    Ok(())
+}
+
+pub fn discard_files(repo_path: &str, file_paths: Vec<String>) -> Result<(), String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    for path in file_paths {
+        discard_file_changes(repo_path, &path)?;
     }
 
     Ok(())
@@ -637,4 +672,454 @@ pub fn commit_changes(repo_path: &str, message: &str, amend: bool) -> Result<Str
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+// ---------------------------------------------------------
+// Remote Operations
+// ---------------------------------------------------------
+
+pub fn get_remotes(repo_path: &str) -> Result<Vec<RemoteInfo>, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["remote", "-v"]);
+
+    let output = cmd.output().map_err(|e| format!("Failed to get remotes: {}", e))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut remotes_map = std::collections::BTreeMap::new();
+
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 2 {
+            let name = parts[0].to_string();
+            let url = parts[1].to_string();
+            remotes_map.entry(name).or_insert(url);
+        }
+    }
+
+    let remotes = remotes_map
+        .into_iter()
+        .map(|(name, url)| RemoteInfo {
+            name,
+            url: Some(url),
+        })
+        .collect();
+
+    Ok(remotes)
+}
+
+pub fn get_ahead_behind(repo_path: &str) -> Result<AheadBehind, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    // Try against upstream
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]);
+
+    let output = cmd.output().map_err(|e| format!("Failed to get ahead/behind count: {}", e))?;
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let counts: Vec<&str> = stdout.split_whitespace().collect();
+        if counts.len() >= 2 {
+            let ahead = counts[0].parse::<usize>().unwrap_or(0);
+            let behind = counts[1].parse::<usize>().unwrap_or(0);
+            return Ok(AheadBehind { ahead, behind });
+        }
+    }
+
+    // Fallback: check if remote branch with same name exists (e.g. origin/<branch>)
+    if let Ok(summary) = get_repo_summary(repo_path) {
+        if let Some(branch) = summary.current_branch {
+            let target = format!("origin/{}", branch);
+            let mut fallback_cmd = create_git_command(repo_path);
+            fallback_cmd.args(["rev-list", "--left-right", "--count", &format!("HEAD...{}", target)]);
+            if let Ok(fb_output) = fallback_cmd.output() {
+                if fb_output.status.success() {
+                    let stdout = String::from_utf8_lossy(&fb_output.stdout);
+                    let counts: Vec<&str> = stdout.split_whitespace().collect();
+                    if counts.len() >= 2 {
+                        let ahead = counts[0].parse::<usize>().unwrap_or(0);
+                        let behind = counts[1].parse::<usize>().unwrap_or(0);
+                        return Ok(AheadBehind { ahead, behind });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(AheadBehind { ahead: 0, behind: 0 })
+}
+
+pub fn fetch_remote(repo_path: &str, remote: Option<&str>, prune: bool) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.arg("fetch");
+
+    if prune {
+        cmd.arg("--prune");
+    }
+
+    match remote {
+        Some(r) if !r.is_empty() && r != "all" => {
+            cmd.arg(r);
+        }
+        _ => {
+            cmd.arg("--all");
+        }
+    }
+
+    let output = cmd.output().map_err(|e| format!("Failed to execute fetch: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(if err.trim().is_empty() {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        } else {
+            err.to_string()
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout.trim(), stderr.trim());
+    Ok(combined.trim().to_string())
+}
+
+pub fn pull_changes(
+    repo_path: &str,
+    remote: &str,
+    branch: &str,
+    rebase: bool,
+) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.arg("pull");
+
+    if rebase {
+        cmd.arg("--rebase");
+    }
+
+    if !remote.trim().is_empty() {
+        cmd.arg(remote.trim());
+    }
+
+    if !branch.trim().is_empty() {
+        cmd.arg(branch.trim());
+    }
+
+    let output = cmd.output().map_err(|e| format!("Failed to execute pull: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        let msg = if !err.trim().is_empty() { err.to_string() } else { out.to_string() };
+        return Err(msg);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout.trim(), stderr.trim());
+    Ok(combined.trim().to_string())
+}
+
+pub fn push_changes(
+    repo_path: &str,
+    remote: &str,
+    branch: &str,
+    force_with_lease: bool,
+    set_upstream: bool,
+) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.arg("push");
+
+    if set_upstream {
+        cmd.arg("-u");
+    }
+
+    if force_with_lease {
+        cmd.arg("--force-with-lease");
+    }
+
+    if !remote.trim().is_empty() {
+        cmd.arg(remote.trim());
+    }
+
+    if !branch.trim().is_empty() {
+        cmd.arg(branch.trim());
+    }
+
+    let output = cmd.output().map_err(|e| format!("Failed to execute push: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        let msg = if !err.trim().is_empty() { err.to_string() } else { out.to_string() };
+        return Err(msg);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout.trim(), stderr.trim());
+    Ok(combined.trim().to_string())
+}
+
+pub fn add_remote(repo_path: &str, name: &str, url: &str) -> Result<(), String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let name = name.trim();
+    let url = url.trim();
+
+    if name.is_empty() {
+        return Err("Remote name cannot be empty.".to_string());
+    }
+    if url.is_empty() {
+        return Err("Remote URL cannot be empty.".to_string());
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["remote", "add", name, url]);
+
+    let output = cmd.output().map_err(|e| format!("Failed to add remote: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(if err.trim().is_empty() {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        } else {
+            err.to_string()
+        });
+    }
+
+    Ok(())
+}
+
+pub fn remove_remote(repo_path: &str, name: &str) -> Result<(), String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["remote", "remove", name.trim()]);
+
+    let output = cmd.output().map_err(|e| format!("Failed to remove remote: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(if err.trim().is_empty() {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        } else {
+            err.to_string()
+        });
+    }
+
+    Ok(())
+}
+
+pub fn update_remote_url(repo_path: &str, name: &str, new_url: &str) -> Result<(), String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["remote", "set-url", name.trim(), new_url.trim()]);
+
+    let output = cmd.output().map_err(|e| format!("Failed to update remote URL: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(if err.trim().is_empty() {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        } else {
+            err.to_string()
+        });
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------
+// Branch Checkout & Management Operations
+// ---------------------------------------------------------
+
+pub fn checkout_branch(repo_path: &str, branch: &str) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["checkout", branch.trim()]);
+
+    let output = cmd.output().map_err(|e| format!("Failed to checkout branch: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        let msg = if !err.trim().is_empty() { err.to_string() } else { out.to_string() };
+        return Err(msg);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout.trim(), stderr.trim());
+    Ok(combined.trim().to_string())
+}
+
+pub fn checkout_remote_branch(
+    repo_path: &str,
+    local_branch: &str,
+    remote_branch: &str,
+    track: bool,
+) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let local_name = local_branch.trim();
+    let remote_name = remote_branch.trim();
+
+    // Check if local branch already exists
+    let check_cmd = create_git_command(repo_path)
+        .args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{}", local_name)])
+        .output();
+
+    let local_exists = match check_cmd {
+        Ok(out) => out.status.success(),
+        Err(_) => false,
+    };
+
+    let mut cmd = create_git_command(repo_path);
+    if local_exists {
+        cmd.args(["checkout", local_name]);
+    } else {
+        if track {
+            cmd.args(["checkout", "-b", local_name, "--track", remote_name]);
+        } else {
+            cmd.args(["checkout", "-b", local_name, remote_name]);
+        }
+    }
+
+    let output = cmd.output().map_err(|e| format!("Failed to checkout remote branch: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        let msg = if !err.trim().is_empty() { err.to_string() } else { out.to_string() };
+        return Err(msg);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout.trim(), stderr.trim());
+    Ok(combined.trim().to_string())
+}
+
+pub fn create_branch(
+    repo_path: &str,
+    name: &str,
+    target_hash: Option<&str>,
+    checkout: bool,
+) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Branch name cannot be empty.".to_string());
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    if checkout {
+        cmd.args(["checkout", "-b", name]);
+        if let Some(hash) = target_hash {
+            if !hash.trim().is_empty() && hash != "uncommitted" {
+                cmd.arg(hash.trim());
+            }
+        }
+    } else {
+        cmd.args(["branch", name]);
+        if let Some(hash) = target_hash {
+            if !hash.trim().is_empty() && hash != "uncommitted" {
+                cmd.arg(hash.trim());
+            }
+        }
+    }
+
+    let output = cmd.output().map_err(|e| format!("Failed to create branch: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        let msg = if !err.trim().is_empty() { err.to_string() } else { out.to_string() };
+        return Err(msg);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout.trim(), stderr.trim());
+    Ok(combined.trim().to_string())
+}
+
+pub fn delete_branch(repo_path: &str, name: &str, force: bool) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.arg("branch");
+    if force {
+        cmd.arg("-D");
+    } else {
+        cmd.arg("-d");
+    }
+    cmd.arg(name.trim());
+
+    let output = cmd.output().map_err(|e| format!("Failed to delete branch: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        let msg = if !err.trim().is_empty() { err.to_string() } else { out.to_string() };
+        return Err(msg);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout.trim(), stderr.trim());
+    Ok(combined.trim().to_string())
+}
+
+pub fn delete_remote_branch(
+    repo_path: &str,
+    remote: &str,
+    branch: &str,
+) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["push", remote.trim(), "--delete", branch.trim()]);
+
+    let output = cmd.output().map_err(|e| format!("Failed to delete remote branch: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        let msg = if !err.trim().is_empty() { err.to_string() } else { out.to_string() };
+        return Err(msg);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}\n{}", stdout.trim(), stderr.trim());
+    Ok(combined.trim().to_string())
 }

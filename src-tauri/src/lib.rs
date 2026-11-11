@@ -3,7 +3,8 @@ mod graph;
 mod models;
 
 use models::{
-    Branch, Commit, CommitWithGraph, FileChange, RepoSummary, WorkingTreeStatus,
+    AheadBehind, Branch, Commit, CommitWithGraph, FileChange, RemoteInfo, RepoSummary,
+    WorkingTreeStatus,
 };
 
 #[tauri::command]
@@ -100,8 +101,99 @@ fn discard_file_changes(path: String, file_path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn discard_files(path: String, file_paths: Vec<String>) -> Result<(), String> {
+    git::discard_files(&path, file_paths)
+}
+
+#[tauri::command]
 fn commit_changes(path: String, message: String, amend: bool) -> Result<String, String> {
     git::commit_changes(&path, &message, amend)
+}
+
+#[tauri::command]
+fn get_remotes(path: String) -> Result<Vec<RemoteInfo>, String> {
+    git::get_remotes(&path)
+}
+
+#[tauri::command]
+fn get_ahead_behind(path: String) -> Result<AheadBehind, String> {
+    git::get_ahead_behind(&path)
+}
+
+#[tauri::command]
+fn fetch_remote(path: String, remote: Option<String>, prune: bool) -> Result<String, String> {
+    git::fetch_remote(&path, remote.as_deref(), prune)
+}
+
+#[tauri::command]
+fn pull_changes(
+    path: String,
+    remote: String,
+    branch: String,
+    rebase: bool,
+) -> Result<String, String> {
+    git::pull_changes(&path, &remote, &branch, rebase)
+}
+
+#[tauri::command]
+fn push_changes(
+    path: String,
+    remote: String,
+    branch: String,
+    force_with_lease: bool,
+    set_upstream: bool,
+) -> Result<String, String> {
+    git::push_changes(&path, &remote, &branch, force_with_lease, set_upstream)
+}
+
+#[tauri::command]
+fn add_remote(path: String, name: String, url: String) -> Result<(), String> {
+    git::add_remote(&path, &name, &url)
+}
+
+#[tauri::command]
+fn remove_remote(path: String, name: String) -> Result<(), String> {
+    git::remove_remote(&path, &name)
+}
+
+#[tauri::command]
+fn update_remote_url(path: String, name: String, new_url: String) -> Result<(), String> {
+    git::update_remote_url(&path, &name, &new_url)
+}
+
+#[tauri::command]
+fn checkout_branch(path: String, branch: String) -> Result<String, String> {
+    git::checkout_branch(&path, &branch)
+}
+
+#[tauri::command]
+fn checkout_remote_branch(
+    path: String,
+    local_branch: String,
+    remote_branch: String,
+    track: bool,
+) -> Result<String, String> {
+    git::checkout_remote_branch(&path, &local_branch, &remote_branch, track)
+}
+
+#[tauri::command]
+fn create_branch(
+    path: String,
+    name: String,
+    target_hash: Option<String>,
+    checkout: bool,
+) -> Result<String, String> {
+    git::create_branch(&path, &name, target_hash.as_deref(), checkout)
+}
+
+#[tauri::command]
+fn delete_branch(path: String, name: String, force: bool) -> Result<String, String> {
+    git::delete_branch(&path, &name, force)
+}
+
+#[tauri::command]
+fn delete_remote_branch(path: String, remote: String, branch: String) -> Result<String, String> {
+    git::delete_remote_branch(&path, &remote, &branch)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -126,7 +218,21 @@ pub fn run() {
             stage_files,
             unstage_files,
             discard_file_changes,
-            commit_changes
+            discard_files,
+            commit_changes,
+            get_remotes,
+            get_ahead_behind,
+            fetch_remote,
+            pull_changes,
+            push_changes,
+            add_remote,
+            remove_remote,
+            update_remote_url,
+            checkout_branch,
+            checkout_remote_branch,
+            create_branch,
+            delete_branch,
+            delete_remote_branch
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

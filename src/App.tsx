@@ -1,21 +1,34 @@
-import { useState, useEffect, useCallback } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { open, ask } from "@tauri-apps/plugin-dialog";
 import {
   openRepository,
   getCommitGraph,
   getBranches,
   getCommitFiles,
   getCommitFileDiff,
+  getRemotes,
+  getAheadBehind,
+  fetchRemote,
+  checkoutBranch,
+  deleteBranch,
+  deleteRemoteBranch,
   RepoSummary,
   CommitWithGraph,
   Branch,
   FileChange,
+  RemoteInfo,
+  AheadBehind,
 } from "./api/git";
 import { GraphCell } from "./components/GraphCell";
 import { DiffViewer } from "./components/DiffViewer";
 import { FileTree } from "./components/FileTree";
 import { WorkingCopyView } from "./components/WorkingCopyView";
 import { BranchTree } from "./components/BranchTree";
+import { PullModal } from "./components/PullModal";
+import { PushModal } from "./components/PushModal";
+import { ManageRemotesModal } from "./components/ManageRemotesModal";
+import { CreateBranchModal } from "./components/CreateBranchModal";
+import { CheckoutRemoteModal } from "./components/CheckoutRemoteModal";
 import {
   FolderOpen,
   GitBranch,
@@ -33,6 +46,8 @@ import {
   Layers,
   Copy,
   Cloud,
+  RefreshCw,
+  Plus,
 } from "./components/Icons";
 import "./App.css";
 
@@ -42,6 +57,19 @@ function App() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [commits, setCommits] = useState<CommitWithGraph[]>([]);
   const [selectedCommit, setSelectedCommit] = useState<CommitWithGraph | null>(null);
+  const [remotes, setRemotes] = useState<RemoteInfo[]>([]);
+  const [aheadBehind, setAheadBehind] = useState<AheadBehind>({ ahead: 0, behind: 0 });
+
+  // Modals & Remote Operations State
+  const [isPullOpen, setIsPullOpen] = useState(false);
+  const [isPushOpen, setIsPushOpen] = useState(false);
+  const [isManageRemotesOpen, setIsManageRemotesOpen] = useState(false);
+  const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false);
+  const [checkoutRemoteTarget, setCheckoutRemoteTarget] = useState<Branch | null>(null);
+  const [isFetching, setIsFetching] = useState(false);
+  const [fetchToast, setFetchToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [refreshKey, setRefreshKey] = useState<number>(0);
+  const isRefreshingRef = useRef(false);
 
   // Active view: "history" (Commit DAG) or "working_copy" (Staging & Commit)
   const [activeView, setActiveView] = useState<"history" | "working_copy">("history");
@@ -84,14 +112,18 @@ function App() {
 
     try {
       const repoSummary = await openRepository(path);
-      const [repoBranches, repoCommits] = await Promise.all([
+      const [repoBranches, repoCommits, repoRemotes, ab] = await Promise.all([
         getBranches(path),
         getCommitGraph(path, 100),
+        getRemotes(path).catch(() => []),
+        getAheadBehind(path).catch(() => ({ ahead: 0, behind: 0 })),
       ]);
 
       setSummary(repoSummary);
       setBranches(repoBranches);
       setCommits(repoCommits);
+      setRemotes(repoRemotes);
+      setAheadBehind(ab);
       setRepoPath(path);
 
       if (repoCommits.length > 0) {
@@ -210,33 +242,199 @@ function App() {
     loadRepository("D:\\Usuarios\\Carlos\\Proyectos\\Rust\\git_client");
   }, []);
 
+  const refreshAll = useCallback(async () => {
+    if (!repoPath || isRefreshingRef.current) return;
+    isRefreshingRef.current = true;
+    try {
+      const [repoSummary, repoBranches, repoCommits, repoRemotes, ab] = await Promise.all([
+        openRepository(repoPath),
+        getBranches(repoPath),
+        getCommitGraph(repoPath, 100),
+        getRemotes(repoPath).catch(() => []),
+        getAheadBehind(repoPath).catch(() => ({ ahead: 0, behind: 0 })),
+      ]);
+
+      setSummary(repoSummary);
+      setBranches(repoBranches);
+      setCommits(repoCommits);
+      setRemotes(repoRemotes);
+      setAheadBehind(ab);
+      setRefreshKey((k) => k + 1);
+
+      setSelectedCommit((prev) => {
+        if (!prev) {
+          return repoCommits.find((c) => c.hash !== "uncommitted") || null;
+        }
+        const matching = repoCommits.find((c) => c.hash === prev.hash);
+        return matching || repoCommits.find((c) => c.hash !== "uncommitted") || null;
+      });
+    } catch (err) {
+      console.error("Auto-refresh error:", err);
+    } finally {
+      isRefreshingRef.current = false;
+    }
+  }, [repoPath]);
+
+  // Auto-refresh when window regains focus, becomes visible, or periodically every 5 seconds
+  useEffect(() => {
+    if (!repoPath) return;
+
+    const handleFocus = () => {
+      refreshAll();
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        refreshAll();
+      }
+    };
+
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    const interval = setInterval(() => {
+      refreshAll();
+    }, 5000);
+
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      clearInterval(interval);
+    };
+  }, [repoPath, refreshAll]);
+
   // When a commit finishes in WorkingCopyView, reload repo and show the graph
   const handleCommitSuccess = () => {
-    loadRepository(repoPath);
+    refreshAll();
     setActiveView("history");
   };
 
-  const handleSwitchToHistory = useCallback(async () => {
+  const handleSwitchToHistory = useCallback(() => {
     setActiveView("history");
+    refreshAll();
+  }, [refreshAll]);
+
+  const handleFetch = async () => {
+    if (!repoPath || isFetching) return;
+    setIsFetching(true);
+    setFetchToast(null);
+
+    try {
+      await fetchRemote(repoPath);
+      await refreshAll();
+      setFetchToast({ message: "Fetch completed successfully.", type: "success" });
+      setTimeout(() => setFetchToast(null), 3000);
+    } catch (err: unknown) {
+      await refreshAll();
+      const msg = typeof err === "string" ? err : String(err);
+      setFetchToast({ message: `Fetch failed: ${msg}`, type: "error" });
+      setTimeout(() => setFetchToast(null), 5000);
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
+  const handleCheckoutLocalBranch = async (branch: Branch) => {
+    if (branch.is_current || !repoPath) return;
+    try {
+      await checkoutBranch(repoPath, branch.name);
+      await refreshAll();
+      setFetchToast({ message: `Switched to branch '${branch.name}'.`, type: "success" });
+      setTimeout(() => setFetchToast(null), 3000);
+    } catch (err: unknown) {
+      await refreshAll();
+      const msg = typeof err === "string" ? err : String(err);
+      setFetchToast({ message: `Checkout failed: ${msg}`, type: "error" });
+      setTimeout(() => setFetchToast(null), 6000);
+    }
+  };
+
+  const handleCheckoutRemoteBranch = (branch: Branch) => {
+    setCheckoutRemoteTarget(branch);
+  };
+
+  const handleDeleteLocalBranch = async (branch: Branch) => {
+    if (branch.is_current || !repoPath) return;
+    try {
+      const confirmed = await ask(
+        `Are you sure you want to delete local branch '${branch.name}'?`,
+        {
+          title: "Delete Local Branch",
+          kind: "warning",
+          okLabel: "Delete Branch",
+          cancelLabel: "Cancel",
+        }
+      );
+      if (!confirmed) return;
+
+      try {
+        await deleteBranch(repoPath, branch.name, false);
+      } catch (err: unknown) {
+        const errMsg = typeof err === "string" ? err : String(err);
+        if (errMsg.toLowerCase().includes("not fully merged") || errMsg.toLowerCase().includes("-d")) {
+          const forceConfirmed = await ask(
+            `Branch '${branch.name}' is not fully merged.\n\nDo you want to force delete it (git branch -D)?`,
+            {
+              title: "Force Delete Branch",
+              kind: "warning",
+              okLabel: "Force Delete",
+              cancelLabel: "Cancel",
+            }
+          );
+          if (forceConfirmed) {
+            await deleteBranch(repoPath, branch.name, true);
+          } else {
+            return;
+          }
+        } else {
+          throw err;
+        }
+      }
+
+      await refreshAll();
+      setFetchToast({ message: `Branch '${branch.name}' deleted.`, type: "success" });
+      setTimeout(() => setFetchToast(null), 3000);
+    } catch (err: unknown) {
+      const msg = typeof err === "string" ? err : String(err);
+      setFetchToast({ message: `Failed to delete branch: ${msg}`, type: "error" });
+      setTimeout(() => setFetchToast(null), 5000);
+    }
+  };
+
+  const handleDeleteRemoteBranch = async (branch: Branch) => {
     if (!repoPath) return;
     try {
-      const [repoSummary, repoCommits] = await Promise.all([
-        openRepository(repoPath),
-        getCommitGraph(repoPath, 100),
-      ]);
-      setSummary(repoSummary);
-      setCommits(repoCommits);
-      setSelectedCommit((prev) => {
-        if (!prev || prev.hash === "uncommitted") {
-          return repoCommits.find((c) => c.hash !== "uncommitted") || null;
+      const slashIdx = branch.name.indexOf("/");
+      if (slashIdx === -1) {
+        throw new Error(`Invalid remote branch format: ${branch.name}`);
+      }
+      const remoteName = branch.name.slice(0, slashIdx);
+      const remoteBranchName = branch.name.slice(slashIdx + 1);
+
+      const confirmed = await ask(
+        `Are you sure you want to delete remote branch '${remoteBranchName}' from remote '${remoteName}'?\n\nThis will permanently delete the branch from the remote server.`,
+        {
+          title: "Delete Remote Branch",
+          kind: "warning",
+          okLabel: "Delete on Remote",
+          cancelLabel: "Cancel",
         }
-        const exists = repoCommits.find((c) => c.hash === prev.hash);
-        return exists || repoCommits.find((c) => c.hash !== "uncommitted") || null;
+      );
+      if (!confirmed) return;
+
+      await deleteRemoteBranch(repoPath, remoteName, remoteBranchName);
+      await refreshAll();
+      setFetchToast({
+        message: `Remote branch '${remoteBranchName}' deleted from '${remoteName}'.`,
+        type: "success",
       });
-    } catch (err) {
-      console.error("Error refreshing history:", err);
+      setTimeout(() => setFetchToast(null), 3000);
+    } catch (err: unknown) {
+      const msg = typeof err === "string" ? err : String(err);
+      setFetchToast({ message: `Failed to delete remote branch: ${msg}`, type: "error" });
+      setTimeout(() => setFetchToast(null), 5000);
     }
-  }, [repoPath]);
+  };
 
   // Drag handlers for resizable panels in History view
   const handleVerticalResize = useCallback((e: React.MouseEvent) => {
@@ -368,15 +566,51 @@ function App() {
             <span>Commit</span>
           </button>
 
-          <button className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer">
+          {/* Pull */}
+          <button
+            onClick={() => setIsPullOpen(true)}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer"
+            title="Pull changes from remote"
+          >
             <ArrowDown size={14} className="text-blue-400" />
             <span>Pull</span>
+            {aheadBehind.behind > 0 && (
+              <span className="bg-blue-500/20 text-blue-300 border border-blue-500/40 text-[10px] px-1.5 py-0.2 rounded-full font-bold ml-0.5">
+                {aheadBehind.behind}
+              </span>
+            )}
           </button>
-          <button className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer">
+
+          {/* Push */}
+          <button
+            onClick={() => setIsPushOpen(true)}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer"
+            title="Push changes to remote"
+          >
             <ArrowUp size={14} className="text-amber-400" />
             <span>Push</span>
+            {aheadBehind.ahead > 0 && (
+              <span className="bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] px-1.5 py-0.2 rounded-full font-bold ml-0.5">
+                {aheadBehind.ahead}
+              </span>
+            )}
           </button>
-          <button className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer">
+
+          {/* Fetch */}
+          <button
+            onClick={handleFetch}
+            disabled={isFetching}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer disabled:opacity-60"
+            title="Fetch all branches and tags from remotes"
+          >
+            <RefreshCw size={13} className={`text-sky-400 ${isFetching ? "animate-spin" : ""}`} />
+            <span>Fetch</span>
+          </button>
+          <button
+            onClick={() => setIsCreateBranchOpen(true)}
+            className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer"
+            title="Create new branch"
+          >
             <GitBranch size={14} className="text-purple-400" />
             <span>Branch</span>
           </button>
@@ -475,28 +709,52 @@ function App() {
                 <BranchTree
                   branches={localBranches}
                   onSelectBranch={handleSelectBranch}
+                  onCheckoutBranch={handleCheckoutLocalBranch}
+                  onDeleteBranch={handleDeleteLocalBranch}
                 />
               </div>
             </div>
 
-            {/* REMOTE BRANCHES */}
-            {remoteBranches.length > 0 && (
-              <div>
-                <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1">
-                  <span className="flex items-center space-x-1.5">
-                    <Cloud size={13} className="text-sky-400" />
-                    <span>Remote ({remoteBranches.length})</span>
-                  </span>
-                </div>
-                <div className="mt-1">
+            {/* REMOTE BRANCHES & REPOSITORIES */}
+            <div>
+              <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1 group">
+                <span className="flex items-center space-x-1.5">
+                  <Cloud size={13} className="text-sky-400" />
+                  <span>Remote ({remotes.length})</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsManageRemotesOpen(true)}
+                  className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-sky-400 transition cursor-pointer"
+                  title="Manage / Add Remotes"
+                >
+                  <Plus size={13} />
+                </button>
+              </div>
+
+              <div className="mt-1">
+                {remotes.length === 0 ? (
+                  <div
+                    onClick={() => setIsManageRemotesOpen(true)}
+                    className="mx-2 my-1 p-2.5 rounded border border-dashed border-zinc-800 hover:border-zinc-700 bg-zinc-900/30 hover:bg-zinc-800/40 text-center cursor-pointer transition text-zinc-500 hover:text-sky-400"
+                  >
+                    <p className="text-[11px] font-medium flex items-center justify-center space-x-1">
+                      <Plus size={12} />
+                      <span>Add Remote</span>
+                    </p>
+                  </div>
+                ) : (
                   <BranchTree
                     branches={remoteBranches}
                     onSelectBranch={handleSelectBranch}
+                    onCheckoutRemoteBranch={handleCheckoutRemoteBranch}
+                    onDeleteRemoteBranch={handleDeleteRemoteBranch}
                     isRemote={true}
+                    configuredRemotes={remotes.map((r) => r.name)}
                   />
-                </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
         </aside>
 
@@ -504,12 +762,9 @@ function App() {
         {activeView === "working_copy" ? (
           <WorkingCopyView
             repoPath={repoPath}
+            refreshKey={refreshKey}
             onCommitSuccess={handleCommitSuccess}
-            onStatusChange={() => {
-              if (repoPath) {
-                openRepository(repoPath).then(setSummary);
-              }
-            }}
+            onStatusChange={refreshAll}
           />
         ) : (
           /* HISTORY GRAPH VIEW */
@@ -763,6 +1018,88 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* PULL MODAL */}
+      <PullModal
+        isOpen={isPullOpen}
+        onClose={() => setIsPullOpen(false)}
+        repoPath={repoPath}
+        currentBranch={summary?.current_branch || null}
+        remotes={remotes}
+        remoteBranches={remoteBranches}
+        onSuccess={() => {
+          refreshAll();
+        }}
+      />
+
+      {/* PUSH MODAL */}
+      <PushModal
+        isOpen={isPushOpen}
+        onClose={() => setIsPushOpen(false)}
+        repoPath={repoPath}
+        currentBranch={summary?.current_branch || null}
+        localBranches={localBranches}
+        remotes={remotes}
+        aheadCount={aheadBehind.ahead}
+        onSuccess={() => {
+          refreshAll();
+        }}
+      />
+
+      {/* MANAGE REMOTES MODAL */}
+      <ManageRemotesModal
+        isOpen={isManageRemotesOpen}
+        onClose={() => setIsManageRemotesOpen(false)}
+        repoPath={repoPath}
+        remotes={remotes}
+        onRefresh={() => {
+          refreshAll();
+        }}
+      />
+
+      {/* CREATE BRANCH MODAL */}
+      <CreateBranchModal
+        isOpen={isCreateBranchOpen}
+        onClose={() => setIsCreateBranchOpen(false)}
+        repoPath={repoPath}
+        currentCommit={selectedCommit}
+        existingLocalBranches={localBranches.map((b) => b.name)}
+        onSuccess={() => {
+          refreshAll();
+        }}
+      />
+
+      {/* CHECKOUT REMOTE BRANCH MODAL */}
+      {checkoutRemoteTarget && (
+        <CheckoutRemoteModal
+          isOpen={!!checkoutRemoteTarget}
+          onClose={() => setCheckoutRemoteTarget(null)}
+          repoPath={repoPath}
+          remoteBranchName={checkoutRemoteTarget.name}
+          existingLocalBranches={localBranches.map((b) => b.name)}
+          onSuccess={() => {
+            refreshAll();
+          }}
+        />
+      )}
+
+      {/* FETCH NOTIFICATION TOAST */}
+      {fetchToast && (
+        <div
+          className={`fixed bottom-4 right-4 z-50 flex items-center space-x-2 px-3.5 py-2 rounded shadow-xl text-xs border transition-all ${
+            fetchToast.type === "success"
+              ? "bg-emerald-950/90 border-emerald-700 text-emerald-200"
+              : "bg-red-950/90 border-red-700 text-red-200"
+          }`}
+        >
+          {fetchToast.type === "success" ? (
+            <CheckCircle2 size={15} className="text-emerald-400 shrink-0" />
+          ) : (
+            <AlertCircle size={15} className="text-red-400 shrink-0" />
+          )}
+          <span>{fetchToast.message}</span>
+        </div>
+      )}
     </div>
   );
 }
