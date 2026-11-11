@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { Branch } from "../api/git";
 import {
   Folder,
@@ -8,12 +8,18 @@ import {
   GitBranch,
   Cloud,
   Server,
+  Trash2,
 } from "./Icons";
 
 interface BranchTreeProps {
   branches: Branch[];
   onSelectBranch: (branch: Branch) => void;
+  onCheckoutBranch?: (branch: Branch) => void;
+  onCheckoutRemoteBranch?: (branch: Branch) => void;
+  onDeleteBranch?: (branch: Branch) => void;
+  onDeleteRemoteBranch?: (branch: Branch) => void;
   isRemote?: boolean;
+  configuredRemotes?: string[];
 }
 
 interface TreeNode {
@@ -24,12 +30,37 @@ interface TreeNode {
   children: Map<string, TreeNode>;
 }
 
+interface ContextMenuState {
+  x: number;
+  y: number;
+  branch: Branch;
+}
+
 export const BranchTree: React.FC<BranchTreeProps> = ({
   branches,
   onSelectBranch,
+  onCheckoutBranch,
+  onCheckoutRemoteBranch,
+  onDeleteBranch,
+  onDeleteRemoteBranch,
   isRemote = false,
+  configuredRemotes,
 }) => {
   const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set());
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  // Close context menu on outside click or scroll
+  useEffect(() => {
+    const handleClose = () => setContextMenu(null);
+    window.addEventListener("click", handleClose);
+    window.addEventListener("contextmenu", handleClose);
+    window.addEventListener("scroll", handleClose, true);
+    return () => {
+      window.removeEventListener("click", handleClose);
+      window.removeEventListener("contextmenu", handleClose);
+      window.removeEventListener("scroll", handleClose, true);
+    };
+  }, []);
 
   // Build hierarchical tree from branch names containing '/'
   const treeRoot = useMemo(() => {
@@ -78,8 +109,22 @@ export const BranchTree: React.FC<BranchTreeProps> = ({
       }
     }
 
+    // If configured remotes exist, ensure each configured remote is present as a root folder
+    if (isRemote && configuredRemotes) {
+      for (const remName of configuredRemotes) {
+        if (!root.children.has(remName)) {
+          root.children.set(remName, {
+            name: remName,
+            fullPath: remName,
+            isFolder: true,
+            children: new Map(),
+          });
+        }
+      }
+    }
+
     return root;
-  }, [branches]);
+  }, [branches, isRemote, configuredRemotes]);
 
   function countBranchesUnder(node: TreeNode): number {
     if (!node.isFolder) return 1;
@@ -153,7 +198,15 @@ export const BranchTree: React.FC<BranchTreeProps> = ({
               )}
             </div>
 
-            {!isCollapsed && renderTreeNode(child, depth + 1)}
+            {!isCollapsed && child.children.size > 0 && renderTreeNode(child, depth + 1)}
+            {!isCollapsed && child.children.size === 0 && (
+              <div
+                className="text-zinc-500 italic text-[10px] py-0.5 select-none"
+                style={{ paddingLeft: `${(depth + 1) * 12 + 16}px` }}
+              >
+                No branches fetched
+              </div>
+            )}
           </div>
         );
       } else {
@@ -164,6 +217,25 @@ export const BranchTree: React.FC<BranchTreeProps> = ({
           <div
             key={branch.name}
             onClick={() => onSelectBranch(branch)}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              if (isRemote) {
+                onCheckoutRemoteBranch?.(branch);
+              } else {
+                if (!isCurrent) {
+                  onCheckoutBranch?.(branch);
+                }
+              }
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              const menuWidth = 220;
+              const menuHeight = 110;
+              const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
+              const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
+              setContextMenu({ x, y, branch });
+            }}
             className={`flex items-center justify-between px-2 py-1 rounded cursor-pointer transition text-xs select-none ${
               isCurrent
                 ? "bg-purple-600/20 text-purple-300 font-semibold border-l-2 border-purple-400"
@@ -172,7 +244,13 @@ export const BranchTree: React.FC<BranchTreeProps> = ({
                 : "text-zinc-300 hover:text-white hover:bg-zinc-800/70"
             }`}
             style={{ paddingLeft: `${depth * 12 + 16}px` }}
-            title={branch.name}
+            title={
+              isRemote
+                ? `Double-click to checkout remote branch '${branch.name}'`
+                : isCurrent
+                ? `Current active branch: ${branch.name}`
+                : `Double-click to checkout '${branch.name}'`
+            }
           >
             <div className="flex items-center space-x-1.5 truncate">
               {isRemote ? (
@@ -198,8 +276,107 @@ export const BranchTree: React.FC<BranchTreeProps> = ({
   }
 
   return (
-    <div className="space-y-0.5">
+    <div className="space-y-0.5 relative">
       {renderTreeNode(treeRoot)}
+
+      {/* Floating Context Menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-50 min-w-[200px] max-w-[280px] bg-[#222226] border border-zinc-700/80 rounded-md shadow-2xl py-1 text-xs text-zinc-200"
+          style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1 font-semibold text-[10px] text-zinc-400 border-b border-zinc-800 truncate">
+            {contextMenu.branch.name}
+          </div>
+
+          {isRemote ? (
+            <>
+              {/* Remote branch menu */}
+              <button
+                onClick={() => {
+                  const target = contextMenu.branch;
+                  setContextMenu(null);
+                  onCheckoutRemoteBranch?.(target);
+                }}
+                className="w-full flex items-center space-x-2 px-3 py-1.5 text-left text-zinc-200 hover:bg-sky-600/20 hover:text-sky-300 transition cursor-pointer"
+              >
+                <GitBranch size={13} className="text-sky-400 shrink-0" />
+                <span>Checkout...</span>
+              </button>
+
+              <div className="my-1 border-t border-zinc-800" />
+
+              <button
+                onClick={() => {
+                  const target = contextMenu.branch;
+                  setContextMenu(null);
+                  onDeleteRemoteBranch?.(target);
+                }}
+                className="w-full flex items-center space-x-2 px-3 py-1.5 text-left text-red-400 hover:bg-red-950/40 hover:text-red-300 transition cursor-pointer"
+              >
+                <Trash2 size={13} className="text-red-400 shrink-0" />
+                <span>Delete on remote...</span>
+              </button>
+            </>
+          ) : (
+            <>
+              {/* Local branch menu */}
+              <button
+                disabled={contextMenu.branch.is_current}
+                onClick={() => {
+                  if (!contextMenu.branch.is_current) {
+                    const target = contextMenu.branch;
+                    setContextMenu(null);
+                    onCheckoutBranch?.(target);
+                  }
+                }}
+                className={`w-full flex items-center space-x-2 px-3 py-1.5 text-left transition ${
+                  contextMenu.branch.is_current
+                    ? "text-zinc-500 cursor-not-allowed opacity-50"
+                    : "text-zinc-200 hover:bg-purple-600/20 hover:text-purple-300 cursor-pointer"
+                }`}
+                title={contextMenu.branch.is_current ? "Already the current branch" : undefined}
+              >
+                <GitBranch
+                  size={13}
+                  className={contextMenu.branch.is_current ? "text-zinc-500 shrink-0" : "text-purple-400 shrink-0"}
+                />
+                <span className="truncate">
+                  {contextMenu.branch.is_current
+                    ? "Current active branch"
+                    : `Checkout '${contextMenu.branch.name}'`}
+                </span>
+              </button>
+
+              <div className="my-1 border-t border-zinc-800" />
+
+              <button
+                disabled={contextMenu.branch.is_current}
+                onClick={() => {
+                  if (!contextMenu.branch.is_current) {
+                    const target = contextMenu.branch;
+                    setContextMenu(null);
+                    onDeleteBranch?.(target);
+                  }
+                }}
+                className={`w-full flex items-center space-x-2 px-3 py-1.5 text-left transition ${
+                  contextMenu.branch.is_current
+                    ? "text-zinc-500 cursor-not-allowed opacity-50"
+                    : "text-red-400 hover:bg-red-950/40 hover:text-red-300 cursor-pointer"
+                }`}
+                title={contextMenu.branch.is_current ? "Cannot delete active branch" : undefined}
+              >
+                <Trash2
+                  size={13}
+                  className={contextMenu.branch.is_current ? "text-zinc-500 shrink-0" : "text-red-400 shrink-0"}
+                />
+                <span className="truncate">Delete &apos;{contextMenu.branch.name}&apos;</span>
+              </button>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 };

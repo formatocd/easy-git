@@ -68,3 +68,15 @@ pub struct WorkingTreeStatus {
     pub staged: Vec<WorkingFile>,
     pub unstaged: Vec<WorkingFile>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteInfo {
+    pub name: String,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AheadBehind {
+    pub ahead: usize,
+    pub behind: usize,
+}

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { WorkingFile } from "../api/git";
 import {
   Folder,
@@ -10,7 +10,7 @@ import {
   TreeViewSolid,
   Plus,
   Minus,
-  Trash2,
+  Undo2,
 } from "./Icons";
 
 interface WorkingFilesSectionProps {
@@ -23,6 +23,7 @@ interface WorkingFilesSectionProps {
   onStageSingle?: (file: WorkingFile, e: React.MouseEvent) => void;
   onUnstageSingle?: (file: WorkingFile, e: React.MouseEvent) => void;
   onDiscardSingle?: (file: WorkingFile, e: React.MouseEvent) => void;
+  onDiscardBatch: (paths: string[]) => void;
   onBatchAction: (paths: string[]) => void;
   batchActionLabel: string;
   onAllAction: () => void;
@@ -35,6 +36,13 @@ interface TreeNode {
   isFolder: boolean;
   file?: WorkingFile;
   children: Map<string, TreeNode>;
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  file: WorkingFile;
+  paths: string[];
 }
 
 function getStatusBadge(status: string) {
@@ -62,6 +70,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
   onStageSingle,
   onUnstageSingle,
   onDiscardSingle,
+  onDiscardBatch,
   onBatchAction,
   batchActionLabel,
   onAllAction,
@@ -73,6 +82,46 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
   // Multi-selection state
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [lastClickedPath, setLastClickedPath] = useState<string | null>(null);
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  // Close context menu on outside click or scroll
+  useEffect(() => {
+    const handleClose = () => setContextMenu(null);
+    window.addEventListener("click", handleClose);
+    window.addEventListener("contextmenu", handleClose);
+    window.addEventListener("scroll", handleClose, true);
+    return () => {
+      window.removeEventListener("click", handleClose);
+      window.removeEventListener("contextmenu", handleClose);
+      window.removeEventListener("scroll", handleClose, true);
+    };
+  }, []);
+
+  const handleFileContextMenu = useCallback(
+    (file: WorkingFile, e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      let currentSelection = selectedPaths;
+      if (!selectedPaths.has(file.path)) {
+        currentSelection = new Set([file.path]);
+        setSelectedPaths(currentSelection);
+        setLastClickedPath(file.path);
+        onSelectFile(file);
+      }
+
+      const paths = Array.from(currentSelection);
+      const menuWidth = 220;
+      const menuHeight = 120;
+      const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
+      const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
+
+      setContextMenu({ x, y, file, paths });
+    },
+    [selectedPaths, onSelectFile]
+  );
 
   // Build tree from files
   const treeRoot = useMemo(() => {
@@ -351,6 +400,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
           <div
             key={child.fullPath}
             onClick={(e) => handleRowClick(file, e)}
+            onContextMenu={(e) => handleFileContextMenu(file, e)}
             className={`group flex items-center justify-between px-1.5 py-0.5 rounded cursor-pointer text-[11px] select-none transition ${
               isChecked
                 ? "bg-blue-600/35 text-sky-100 font-medium"
@@ -378,9 +428,9 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
                 <button
                   onClick={(e) => onDiscardSingle(file, e)}
                   title="Discard changes"
-                  className="p-0.5 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-950/40 cursor-pointer"
+                  className="p-0.5 rounded text-zinc-400 hover:text-white hover:bg-zinc-700/60 cursor-pointer"
                 >
-                  <Trash2 size={11} />
+                  <Undo2 size={11} />
                 </button>
               )}
               {isStaged && onUnstageSingle && (
@@ -503,6 +553,7 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
               <div
                 key={file.path}
                 onClick={(e) => handleRowClick(file, e)}
+                onContextMenu={(e) => handleFileContextMenu(file, e)}
                 className={`group flex items-center justify-between px-2 py-1 rounded cursor-pointer text-[11px] select-none transition ${
                   isChecked
                     ? "bg-blue-600/35 text-sky-100 font-medium"
@@ -529,9 +580,9 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
                     <button
                       onClick={(e) => onDiscardSingle(file, e)}
                       title="Discard changes"
-                      className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-rose-950/40 cursor-pointer"
+                      className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-700/60 cursor-pointer"
                     >
-                      <Trash2 size={12} />
+                      <Undo2 size={12} />
                     </button>
                   )}
                   {isStaged && onUnstageSingle && (
@@ -558,6 +609,71 @@ export const WorkingFilesSection: React.FC<WorkingFilesSectionProps> = ({
           })
         )}
       </div>
+
+      {/* Floating Context Menu */}
+      {contextMenu && (
+        <div
+          className="fixed z-50 min-w-[210px] max-w-[290px] bg-[#222226] border border-zinc-700/80 rounded-md shadow-2xl py-1 text-xs text-zinc-200"
+          style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1 font-semibold text-[10px] text-zinc-400 border-b border-zinc-800 truncate">
+            {contextMenu.paths.length === 1
+              ? contextMenu.paths[0]
+              : `${contextMenu.paths.length} files selected`}
+          </div>
+
+          {/* Stage / Unstage Action */}
+          <button
+            onClick={() => {
+              const targetPaths = contextMenu.paths;
+              setContextMenu(null);
+              onBatchAction(targetPaths);
+              setSelectedPaths(new Set());
+            }}
+            className="w-full flex items-center space-x-2 px-3 py-1.5 text-left text-zinc-200 hover:bg-zinc-800 hover:text-white transition cursor-pointer"
+          >
+            {isStaged ? (
+              <>
+                <Minus size={13} className="text-rose-400 shrink-0" />
+                <span>
+                  {contextMenu.paths.length === 1
+                    ? "Unstage file"
+                    : `Unstage ${contextMenu.paths.length} files`}
+                </span>
+              </>
+            ) : (
+              <>
+                <Plus size={13} className="text-emerald-400 shrink-0" />
+                <span>
+                  {contextMenu.paths.length === 1
+                    ? "Stage file"
+                    : `Stage ${contextMenu.paths.length} files`}
+                </span>
+              </>
+            )}
+          </button>
+
+          <div className="my-1 border-t border-zinc-800" />
+
+          {/* Discard Action */}
+          <button
+            onClick={() => {
+              const targetPaths = contextMenu.paths;
+              setContextMenu(null);
+              onDiscardBatch(targetPaths);
+            }}
+            className="w-full flex items-center space-x-2 px-3 py-1.5 text-left text-zinc-200 hover:bg-zinc-800 hover:text-white transition cursor-pointer"
+          >
+            <Undo2 size={13} className="text-zinc-400 shrink-0" />
+            <span>
+              {contextMenu.paths.length === 1
+                ? "Discard file changes"
+                : `Discard changes in ${contextMenu.paths.length} files...`}
+            </span>
+          </button>
+        </div>
+      )}
     </div>
   );
 };

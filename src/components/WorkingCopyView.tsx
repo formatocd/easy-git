@@ -11,6 +11,7 @@ import {
   stageAll,
   unstageAll,
   discardFileChanges,
+  discardFiles,
   commitChanges,
 } from "../api/git";
 import { DiffViewer } from "./DiffViewer";
@@ -23,12 +24,14 @@ import { ask } from "@tauri-apps/plugin-dialog";
 
 interface WorkingCopyViewProps {
   repoPath: string;
+  refreshKey?: number;
   onCommitSuccess: () => void;
   onStatusChange?: () => void;
 }
 
 export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
   repoPath,
+  refreshKey,
   onCommitSuccess,
   onStatusChange,
 }) => {
@@ -82,6 +85,15 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
 
   useEffect(() => {
     refreshStatus();
+  }, [repoPath, refreshKey]);
+
+  // Auto-refresh when window regains focus
+  useEffect(() => {
+    const onFocus = () => {
+      refreshStatus();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, [repoPath]);
 
   // Load diff when selected file changes
@@ -172,22 +184,23 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
     }
   }
 
-  async function handleDiscard(file: WorkingFile, e: React.MouseEvent) {
-    e.stopPropagation();
-    e.preventDefault();
+  async function handleDiscardBatch(paths: string[]) {
+    if (paths.length === 0) return;
 
-    // Use native Tauri dialog (ask) - NOT browser window.confirm
+    const count = paths.length;
+    const message =
+      count === 1
+        ? `Are you sure you want to discard all changes in '${paths[0]}'?\n\nThis action cannot be undone.`
+        : `Are you sure you want to discard all uncommitted changes in ${count} files?\n\nThis action cannot be undone.`;
+
     let confirmed = false;
     try {
-      confirmed = await ask(
-        `Are you sure you want to discard all changes in '${file.path}'?\nThis action cannot be undone.`,
-        {
-          title: "Discard Changes",
-          kind: "warning",
-          okLabel: "Discard changes",
-          cancelLabel: "Cancel",
-        }
-      );
+      confirmed = await ask(message, {
+        title: "Discard Changes",
+        kind: "warning",
+        okLabel: count === 1 ? "Discard file changes" : `Discard ${count} files`,
+        cancelLabel: "Cancel",
+      });
     } catch (dialogErr) {
       console.warn("Fallback dialog check:", dialogErr);
       confirmed = false;
@@ -198,11 +211,18 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
     }
 
     try {
-      await discardFileChanges(repoPath, file.path);
+      await discardFiles(repoPath, paths);
       await refreshStatus();
+      onStatusChange?.();
     } catch (err: unknown) {
       setErrorMsg(String(err));
     }
+  }
+
+  async function handleDiscard(file: WorkingFile, e: React.MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    await handleDiscardBatch([file.path]);
   }
 
   async function handleCommit() {
@@ -284,6 +304,7 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
           selectedFile={selectedFile}
           onSelectFile={(f) => setSelectedFile(f)}
           onUnstageSingle={handleUnstage}
+          onDiscardBatch={handleDiscardBatch}
           onBatchAction={handleUnstageBatch}
           batchActionLabel="Unstage"
           onAllAction={handleUnstageAll}
@@ -300,6 +321,7 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
           onSelectFile={(f) => setSelectedFile(f)}
           onStageSingle={handleStage}
           onDiscardSingle={handleDiscard}
+          onDiscardBatch={handleDiscardBatch}
           onBatchAction={handleStageBatch}
           batchActionLabel="Stage"
           onAllAction={handleStageAll}
