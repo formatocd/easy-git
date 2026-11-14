@@ -106,6 +106,11 @@ fn discard_files(path: String, file_paths: Vec<String>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn discard_all_changes(path: String) -> Result<(), String> {
+    git::discard_all_changes(&path)
+}
+
+#[tauri::command]
 fn commit_changes(path: String, message: String, amend: bool) -> Result<String, String> {
     git::commit_changes(&path, &message, amend)
 }
@@ -196,6 +201,32 @@ fn delete_remote_branch(path: String, remote: String, branch: String) -> Result<
     git::delete_remote_branch(&path, &remote, &branch)
 }
 
+#[tauri::command]
+fn merge_branch(
+    path: String,
+    branch: String,
+    no_ff: bool,
+    squash: bool,
+    message: Option<String>,
+) -> Result<models::MergeResult, String> {
+    git::merge_branch(&path, &branch, no_ff, squash, message.as_deref())
+}
+
+#[tauri::command]
+fn abort_merge(path: String) -> Result<String, String> {
+    git::abort_merge(&path)
+}
+
+#[tauri::command]
+fn is_merging(path: String) -> Result<bool, String> {
+    Ok(git::is_repo_merging(&path))
+}
+
+#[tauri::command]
+fn get_merge_message(path: String) -> Result<Option<String>, String> {
+    Ok(git::get_merge_message(&path))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -219,6 +250,7 @@ pub fn run() {
             unstage_files,
             discard_file_changes,
             discard_files,
+            discard_all_changes,
             commit_changes,
             get_remotes,
             get_ahead_behind,
@@ -232,7 +264,11 @@ pub fn run() {
             checkout_remote_branch,
             create_branch,
             delete_branch,
-            delete_remote_branch
+            delete_remote_branch,
+            merge_branch,
+            abort_merge,
+            is_merging,
+            get_merge_message
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

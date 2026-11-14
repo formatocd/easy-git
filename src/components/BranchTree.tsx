@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   GitBranch,
+  GitPullRequest,
   Cloud,
   Server,
   Trash2,
@@ -13,11 +14,13 @@ import {
 
 interface BranchTreeProps {
   branches: Branch[];
+  currentBranch?: string | null;
   onSelectBranch: (branch: Branch) => void;
   onCheckoutBranch?: (branch: Branch) => void;
   onCheckoutRemoteBranch?: (branch: Branch) => void;
   onDeleteBranch?: (branch: Branch) => void;
   onDeleteRemoteBranch?: (branch: Branch) => void;
+  onMergeBranch?: (branch: Branch) => void;
   isRemote?: boolean;
   configuredRemotes?: string[];
 }
@@ -38,11 +41,13 @@ interface ContextMenuState {
 
 export const BranchTree: React.FC<BranchTreeProps> = ({
   branches,
+  currentBranch,
   onSelectBranch,
   onCheckoutBranch,
   onCheckoutRemoteBranch,
   onDeleteBranch,
   onDeleteRemoteBranch,
+  onMergeBranch,
   isRemote = false,
   configuredRemotes,
 }) => {
@@ -305,6 +310,18 @@ export const BranchTree: React.FC<BranchTreeProps> = ({
                 <span>Checkout...</span>
               </button>
 
+              <button
+                onClick={() => {
+                  const target = contextMenu.branch;
+                  setContextMenu(null);
+                  onMergeBranch?.(target);
+                }}
+                className="w-full flex items-center space-x-2 px-3 py-1.5 text-left text-zinc-200 hover:bg-pink-600/20 hover:text-pink-300 transition cursor-pointer"
+              >
+                <GitPullRequest size={13} className="text-pink-400 shrink-0" />
+                <span className="truncate">Merge &apos;{contextMenu.branch.name}&apos; into {currentBranch || "HEAD"}...</span>
+              </button>
+
               <div className="my-1 border-t border-zinc-800" />
 
               <button
@@ -348,6 +365,20 @@ export const BranchTree: React.FC<BranchTreeProps> = ({
                     : `Checkout '${contextMenu.branch.name}'`}
                 </span>
               </button>
+
+              {!contextMenu.branch.is_current && (
+                <button
+                  onClick={() => {
+                    const target = contextMenu.branch;
+                    setContextMenu(null);
+                    onMergeBranch?.(target);
+                  }}
+                  className="w-full flex items-center space-x-2 px-3 py-1.5 text-left text-zinc-200 hover:bg-pink-600/20 hover:text-pink-300 transition cursor-pointer"
+                >
+                  <GitPullRequest size={13} className="text-pink-400 shrink-0" />
+                  <span className="truncate">Merge into {currentBranch || "HEAD"}...</span>
+                </button>
+              )}
 
               <div className="my-1 border-t border-zinc-800" />
 

@@ -53,6 +53,8 @@ function getStatusBadge(status: string) {
       return <span className="text-[9px] px-1 bg-rose-500/20 text-rose-400 font-bold rounded">D</span>;
     case "R":
       return <span className="text-[9px] px-1 bg-purple-500/20 text-purple-400 font-bold rounded">R</span>;
+    case "C":
+      return <span className="text-[9px] px-1 bg-amber-500/20 text-amber-300 border border-amber-500/40 font-bold rounded" title="Conflict">C</span>;
     case "?":
       return <span className="text-[9px] px-1 bg-zinc-500/20 text-zinc-400 font-bold rounded">?</span>;
     default:

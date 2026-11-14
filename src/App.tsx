@@ -12,6 +12,9 @@ import {
   checkoutBranch,
   deleteBranch,
   deleteRemoteBranch,
+  abortMerge,
+  discardAllChanges,
+  MergeResult,
   RepoSummary,
   CommitWithGraph,
   Branch,
@@ -29,6 +32,9 @@ import { PushModal } from "./components/PushModal";
 import { ManageRemotesModal } from "./components/ManageRemotesModal";
 import { CreateBranchModal } from "./components/CreateBranchModal";
 import { CheckoutRemoteModal } from "./components/CheckoutRemoteModal";
+import { MergeModal } from "./components/MergeModal";
+import { ErrorModal } from "./components/ErrorModal";
+import { ConfirmCheckoutModal } from "./components/ConfirmCheckoutModal";
 import {
   FolderOpen,
   GitBranch,
@@ -39,6 +45,7 @@ import {
   Archive,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Tag,
   Clock,
   User,
@@ -65,7 +72,16 @@ function App() {
   const [isPushOpen, setIsPushOpen] = useState(false);
   const [isManageRemotesOpen, setIsManageRemotesOpen] = useState(false);
   const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false);
+  const [isMergeOpen, setIsMergeOpen] = useState(false);
+  const [mergeSourceBranch, setMergeSourceBranch] = useState<string | null>(null);
+  const [isAbortingMerge, setIsAbortingMerge] = useState(false);
   const [checkoutRemoteTarget, setCheckoutRemoteTarget] = useState<Branch | null>(null);
+  const [confirmCheckoutTarget, setConfirmCheckoutTarget] = useState<Branch | null>(null);
+  const [errorModal, setErrorModal] = useState<{ title: string; message: string } | null>(null);
+
+  const showError = useCallback((title: string, message: string) => {
+    setErrorModal({ title, message });
+  }, []);
   const [isFetching, setIsFetching] = useState(false);
   const [fetchToast, setFetchToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [refreshKey, setRefreshKey] = useState<number>(0);
@@ -327,8 +343,7 @@ function App() {
     } catch (err: unknown) {
       await refreshAll();
       const msg = typeof err === "string" ? err : String(err);
-      setFetchToast({ message: `Fetch failed: ${msg}`, type: "error" });
-      setTimeout(() => setFetchToast(null), 5000);
+      showError("Fetch Error", msg);
     } finally {
       setIsFetching(false);
     }
@@ -336,6 +351,13 @@ function App() {
 
   const handleCheckoutLocalBranch = async (branch: Branch) => {
     if (branch.is_current || !repoPath) return;
+
+    // If repo has uncommitted changes or an unresolved merge, prompt confirmation modal!
+    if (summary && (!summary.is_clean || summary.is_merging)) {
+      setConfirmCheckoutTarget(branch);
+      return;
+    }
+
     try {
       await checkoutBranch(repoPath, branch.name);
       await refreshAll();
@@ -344,8 +366,35 @@ function App() {
     } catch (err: unknown) {
       await refreshAll();
       const msg = typeof err === "string" ? err : String(err);
-      setFetchToast({ message: `Checkout failed: ${msg}`, type: "error" });
-      setTimeout(() => setFetchToast(null), 6000);
+      if (
+        msg.toLowerCase().includes("overwritten by checkout") ||
+        msg.toLowerCase().includes("local changes") ||
+        msg.toLowerCase().includes("uncommitted")
+      ) {
+        setConfirmCheckoutTarget(branch);
+      } else {
+        showError("Checkout Branch Error", msg);
+      }
+    }
+  };
+
+  const handleConfirmCheckout = async (discardChanges: boolean) => {
+    if (!confirmCheckoutTarget || !repoPath) return;
+    const targetBranchName = confirmCheckoutTarget.name;
+    setConfirmCheckoutTarget(null);
+
+    try {
+      if (discardChanges) {
+        await discardAllChanges(repoPath);
+      }
+      await checkoutBranch(repoPath, targetBranchName);
+      await refreshAll();
+      setFetchToast({ message: `Switched to branch '${targetBranchName}'.`, type: "success" });
+      setTimeout(() => setFetchToast(null), 3000);
+    } catch (err: unknown) {
+      await refreshAll();
+      const msg = typeof err === "string" ? err : String(err);
+      showError("Checkout Branch Error", msg);
     }
   };
 
@@ -396,8 +445,7 @@ function App() {
       setTimeout(() => setFetchToast(null), 3000);
     } catch (err: unknown) {
       const msg = typeof err === "string" ? err : String(err);
-      setFetchToast({ message: `Failed to delete branch: ${msg}`, type: "error" });
-      setTimeout(() => setFetchToast(null), 5000);
+      showError("Delete Branch Error", msg);
     }
   };
 
@@ -431,8 +479,57 @@ function App() {
       setTimeout(() => setFetchToast(null), 3000);
     } catch (err: unknown) {
       const msg = typeof err === "string" ? err : String(err);
-      setFetchToast({ message: `Failed to delete remote branch: ${msg}`, type: "error" });
-      setTimeout(() => setFetchToast(null), 5000);
+      showError("Delete Remote Branch Error", msg);
+    }
+  };
+
+  const handleOpenMerge = (sourceBranch?: string) => {
+    setMergeSourceBranch(sourceBranch || null);
+    setIsMergeOpen(true);
+  };
+
+  const handleMergeSuccess = async (result: MergeResult) => {
+    await refreshAll();
+    if (result.status === "success") {
+      setFetchToast({ message: "Merge completed successfully.", type: "success" });
+      setTimeout(() => setFetchToast(null), 3500);
+    } else if (result.status === "already_up_to_date") {
+      setFetchToast({ message: "Already up to date. No changes to merge.", type: "success" });
+      setTimeout(() => setFetchToast(null), 3500);
+    } else if (result.status === "conflict") {
+      setFetchToast({
+        message: `Merge conflict in ${result.conflicts.length} files. Please resolve conflicts or abort merge.`,
+        type: "error",
+      });
+      setTimeout(() => setFetchToast(null), 6000);
+      setActiveView("working_copy");
+    }
+  };
+
+  const handleAbortMerge = async () => {
+    if (!repoPath || isAbortingMerge) return;
+    const confirmed = await ask(
+      "Are you sure you want to abort the current merge?\n\nAll unresolved merge changes will be discarded.",
+      {
+        title: "Abort Merge",
+        kind: "warning",
+        okLabel: "Abort Merge",
+        cancelLabel: "Cancel",
+      }
+    );
+    if (!confirmed) return;
+
+    setIsAbortingMerge(true);
+    try {
+      await abortMerge(repoPath);
+      await refreshAll();
+      setFetchToast({ message: "Merge aborted cleanly.", type: "success" });
+      setTimeout(() => setFetchToast(null), 3000);
+    } catch (err: unknown) {
+      const msg = typeof err === "string" ? err : String(err);
+      showError("Abort Merge Error", msg);
+    } finally {
+      setIsAbortingMerge(false);
     }
   };
 
@@ -614,7 +711,11 @@ function App() {
             <GitBranch size={14} className="text-purple-400" />
             <span>Branch</span>
           </button>
-          <button className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer">
+          <button
+            onClick={() => handleOpenMerge()}
+            className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer"
+            title="Merge branch into current branch"
+          >
             <GitPullRequest size={14} className="text-pink-400" />
             <span>Merge</span>
           </button>
@@ -638,7 +739,11 @@ function App() {
               className="flex items-center space-x-1 cursor-pointer"
               title="Click to view changes and stage commit"
             >
-              {summary.is_clean ? (
+              {summary.is_merging ? (
+                <span className="flex items-center text-amber-300 text-[11px] bg-amber-950/80 border border-amber-600 px-2 py-0.5 rounded animate-pulse">
+                  <AlertTriangle size={11} className="mr-1 text-amber-400" /> Merging (Conflicts)
+                </span>
+              ) : summary.is_clean ? (
                 <span className="flex items-center text-emerald-400 text-[11px] bg-emerald-950/60 border border-emerald-800 px-2 py-0.5 rounded">
                   <CheckCircle2 size={11} className="mr-1" /> Clean
                 </span>
@@ -651,6 +756,36 @@ function App() {
           </div>
         )}
       </header>
+
+      {/* CONFLICT / MERGE IN PROGRESS BANNER */}
+      {summary?.is_merging && (
+        <div className="bg-amber-950/90 border-b border-amber-600/70 px-4 py-2 flex items-center justify-between text-xs text-amber-200 shrink-0 shadow-inner z-20">
+          <div className="flex items-center space-x-2">
+            <AlertTriangle size={15} className="text-amber-400 shrink-0" />
+            <span className="font-semibold text-amber-100">Merge in progress with conflicts!</span>
+            <span className="text-amber-300/80 hidden sm:inline">
+              Resolve conflicts in File Status and commit, or abort the merge.
+            </span>
+          </div>
+          <div className="flex items-center space-x-2">
+            {activeView !== "working_copy" && (
+              <button
+                onClick={() => setActiveView("working_copy")}
+                className="px-2.5 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-100 rounded text-[11px] font-medium border border-amber-500/40 cursor-pointer transition"
+              >
+                Go to File Status
+              </button>
+            )}
+            <button
+              onClick={handleAbortMerge}
+              disabled={isAbortingMerge}
+              className="px-2.5 py-1 bg-rose-700 hover:bg-rose-600 disabled:opacity-60 text-white rounded text-[11px] font-semibold cursor-pointer transition shadow"
+            >
+              {isAbortingMerge ? "Aborting..." : "Abort Merge"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 2. MAIN BODY */}
       <div className="flex flex-1 overflow-hidden">
@@ -708,9 +843,11 @@ function App() {
               <div className="mt-1">
                 <BranchTree
                   branches={localBranches}
+                  currentBranch={summary?.current_branch}
                   onSelectBranch={handleSelectBranch}
                   onCheckoutBranch={handleCheckoutLocalBranch}
                   onDeleteBranch={handleDeleteLocalBranch}
+                  onMergeBranch={(b) => handleOpenMerge(b.name)}
                 />
               </div>
             </div>
@@ -746,9 +883,11 @@ function App() {
                 ) : (
                   <BranchTree
                     branches={remoteBranches}
+                    currentBranch={summary?.current_branch}
                     onSelectBranch={handleSelectBranch}
                     onCheckoutRemoteBranch={handleCheckoutRemoteBranch}
                     onDeleteRemoteBranch={handleDeleteRemoteBranch}
+                    onMergeBranch={(b) => handleOpenMerge(b.name)}
                     isRemote={true}
                     configuredRemotes={remotes.map((r) => r.name)}
                   />
@@ -1062,7 +1201,9 @@ function App() {
         isOpen={isCreateBranchOpen}
         onClose={() => setIsCreateBranchOpen(false)}
         repoPath={repoPath}
+        currentBranch={summary?.current_branch || null}
         currentCommit={selectedCommit}
+        commits={commits}
         existingLocalBranches={localBranches.map((b) => b.name)}
         onSuccess={() => {
           refreshAll();
@@ -1080,6 +1221,41 @@ function App() {
           onSuccess={() => {
             refreshAll();
           }}
+        />
+      )}
+
+      {/* MERGE MODAL */}
+      <MergeModal
+        isOpen={isMergeOpen}
+        onClose={() => {
+          setIsMergeOpen(false);
+          setMergeSourceBranch(null);
+        }}
+        repoPath={repoPath}
+        currentBranch={summary?.current_branch || null}
+        localBranches={localBranches}
+        remoteBranches={remoteBranches}
+        initialSourceBranch={mergeSourceBranch}
+        onSuccess={handleMergeSuccess}
+      />
+
+      {/* CONFIRM CHECKOUT WITH UNCOMMITTED CHANGES MODAL */}
+      {confirmCheckoutTarget && (
+        <ConfirmCheckoutModal
+          isOpen={!!confirmCheckoutTarget}
+          onClose={() => setConfirmCheckoutTarget(null)}
+          targetBranchName={confirmCheckoutTarget.name}
+          onConfirm={handleConfirmCheckout}
+        />
+      )}
+
+      {/* ERROR MODAL (DISMISSED WITH ACEPTAR BUTTON) */}
+      {errorModal && (
+        <ErrorModal
+          isOpen={!!errorModal}
+          onClose={() => setErrorModal(null)}
+          title={errorModal.title}
+          message={errorModal.message}
         />
       )}
 

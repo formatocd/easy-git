@@ -46,6 +46,14 @@ pub struct RepoSummary {
     pub name: String,
     pub current_branch: Option<String>,
     pub is_clean: bool,
+    pub is_merging: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeResult {
+    pub status: String, // "success", "already_up_to_date", "conflict"
+    pub message: String,
+    pub conflicts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
