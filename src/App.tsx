@@ -14,6 +14,12 @@ import {
   deleteRemoteBranch,
   abortMerge,
   discardAllChanges,
+  getStashes,
+  stashApply,
+  stashPop,
+  stashDrop,
+  getStashFiles,
+  getStashFileDiff,
   MergeResult,
   RepoSummary,
   CommitWithGraph,
@@ -21,6 +27,7 @@ import {
   FileChange,
   RemoteInfo,
   AheadBehind,
+  StashEntry,
 } from "./api/git";
 import { GraphCell } from "./components/GraphCell";
 import { DiffViewer } from "./components/DiffViewer";
@@ -35,6 +42,8 @@ import { CheckoutRemoteModal } from "./components/CheckoutRemoteModal";
 import { MergeModal } from "./components/MergeModal";
 import { ErrorModal } from "./components/ErrorModal";
 import { ConfirmCheckoutModal } from "./components/ConfirmCheckoutModal";
+import { StashModal } from "./components/StashModal";
+import { StashList } from "./components/StashList";
 import {
   FolderOpen,
   GitBranch,
@@ -55,6 +64,8 @@ import {
   Cloud,
   RefreshCw,
   Plus,
+  Play,
+  Trash2,
 } from "./components/Icons";
 import "./App.css";
 
@@ -66,6 +77,7 @@ function App() {
   const [selectedCommit, setSelectedCommit] = useState<CommitWithGraph | null>(null);
   const [remotes, setRemotes] = useState<RemoteInfo[]>([]);
   const [aheadBehind, setAheadBehind] = useState<AheadBehind>({ ahead: 0, behind: 0 });
+  const [stashes, setStashes] = useState<StashEntry[]>([]);
 
   // Modals & Remote Operations State
   const [isPullOpen, setIsPullOpen] = useState(false);
@@ -73,6 +85,7 @@ function App() {
   const [isManageRemotesOpen, setIsManageRemotesOpen] = useState(false);
   const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false);
   const [isMergeOpen, setIsMergeOpen] = useState(false);
+  const [isStashModalOpen, setIsStashModalOpen] = useState(false);
   const [mergeSourceBranch, setMergeSourceBranch] = useState<string | null>(null);
   const [isAbortingMerge, setIsAbortingMerge] = useState(false);
   const [checkoutRemoteTarget, setCheckoutRemoteTarget] = useState<Branch | null>(null);
@@ -87,8 +100,8 @@ function App() {
   const [refreshKey, setRefreshKey] = useState<number>(0);
   const isRefreshingRef = useRef(false);
 
-  // Active view: "history" (Commit DAG) or "working_copy" (Staging & Commit)
-  const [activeView, setActiveView] = useState<"history" | "working_copy">("history");
+  // Active view: "history" (Commit DAG), "working_copy" (Staging & Commit), or "stash" (Stash preview)
+  const [activeView, setActiveView] = useState<"history" | "working_copy" | "stash">("history");
 
   // File changes & Diff state for History View
   const [commitFiles, setCommitFiles] = useState<FileChange[]>([]);
@@ -96,6 +109,15 @@ function App() {
   const [diffText, setDiffText] = useState<string | null>(null);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [loadingDiff, setLoadingDiff] = useState(false);
+
+  // Stash preview state
+  const [selectedStash, setSelectedStash] = useState<StashEntry | null>(null);
+  const [stashFiles, setStashFiles] = useState<FileChange[]>([]);
+  const [selectedStashFile, setSelectedStashFile] = useState<FileChange | null>(null);
+  const [stashDiffText, setStashDiffText] = useState<string | null>(null);
+  const [loadingStashFiles, setLoadingStashFiles] = useState(false);
+  const [loadingStashDiff, setLoadingStashDiff] = useState(false);
+  const [isStashOperating, setIsStashOperating] = useState(false);
 
   // Resizable panel sizes configured to match the user's layout by default:
   // - bottomHeightPercent: 50% (50/50 vertical split between commits table and bottom panels)
@@ -128,11 +150,12 @@ function App() {
 
     try {
       const repoSummary = await openRepository(path);
-      const [repoBranches, repoCommits, repoRemotes, ab] = await Promise.all([
+      const [repoBranches, repoCommits, repoRemotes, ab, repoStashes] = await Promise.all([
         getBranches(path),
         getCommitGraph(path, 100),
         getRemotes(path).catch(() => []),
         getAheadBehind(path).catch(() => ({ ahead: 0, behind: 0 })),
+        getStashes(path).catch(() => []),
       ]);
 
       setSummary(repoSummary);
@@ -140,6 +163,11 @@ function App() {
       setCommits(repoCommits);
       setRemotes(repoRemotes);
       setAheadBehind(ab);
+      setStashes(repoStashes);
+      setSelectedStash(null);
+      setStashFiles([]);
+      setSelectedStashFile(null);
+      setStashDiffText(null);
       setRepoPath(path);
 
       if (repoCommits.length > 0) {
@@ -253,6 +281,82 @@ function App() {
     };
   }, [selectedCommit?.hash, selectedFile?.path, repoPath]);
 
+  // When a stash is selected, load its changed files
+  useEffect(() => {
+    if (!selectedStash || !repoPath) {
+      setStashFiles([]);
+      setSelectedStashFile(null);
+      setStashDiffText(null);
+      return;
+    }
+
+    let isCancelled = false;
+    async function fetchStashFiles() {
+      setLoadingStashFiles(true);
+      try {
+        const files = await getStashFiles(repoPath, selectedStash!.reference);
+        if (!isCancelled) {
+          setStashFiles(files);
+          if (files.length > 0) {
+            setSelectedStashFile(files[0]);
+          } else {
+            setSelectedStashFile(null);
+            setStashDiffText(null);
+          }
+        }
+      } catch (err) {
+        if (!isCancelled) {
+          console.error("Error loading stash files:", err);
+          setStashFiles([]);
+          setSelectedStashFile(null);
+          setStashDiffText(null);
+        }
+      } finally {
+        if (!isCancelled) setLoadingStashFiles(false);
+      }
+    }
+
+    fetchStashFiles();
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedStash?.reference, selectedStash?.hash, repoPath]);
+
+  // When a file is selected inside Stash preview, load its diff
+  useEffect(() => {
+    if (!selectedStash || !selectedStashFile || !repoPath) {
+      setStashDiffText(null);
+      return;
+    }
+
+    let isCancelled = false;
+    async function fetchStashDiff() {
+      setLoadingStashDiff(true);
+      try {
+        const diff = await getStashFileDiff(
+          repoPath,
+          selectedStash!.reference,
+          selectedStashFile!.path,
+        );
+        if (!isCancelled) {
+          setStashDiffText(diff);
+        }
+      } catch (err) {
+        if (!isCancelled) {
+          console.error("Error loading stash diff:", err);
+          setStashDiffText("Error loading stash file diff.");
+        }
+      } finally {
+        if (!isCancelled) setLoadingStashDiff(false);
+      }
+    }
+
+    fetchStashDiff();
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedStash?.reference, selectedStash?.hash, selectedStashFile?.path, repoPath]);
+
   // Load current repository initially
   useEffect(() => {
     loadRepository("D:\\Usuarios\\Carlos\\Proyectos\\Rust\\git_client");
@@ -262,12 +366,13 @@ function App() {
     if (!repoPath || isRefreshingRef.current) return;
     isRefreshingRef.current = true;
     try {
-      const [repoSummary, repoBranches, repoCommits, repoRemotes, ab] = await Promise.all([
+      const [repoSummary, repoBranches, repoCommits, repoRemotes, ab, repoStashes] = await Promise.all([
         openRepository(repoPath),
         getBranches(repoPath),
         getCommitGraph(repoPath, 100),
         getRemotes(repoPath).catch(() => []),
         getAheadBehind(repoPath).catch(() => ({ ahead: 0, behind: 0 })),
+        getStashes(repoPath).catch(() => []),
       ]);
 
       setSummary(repoSummary);
@@ -275,7 +380,13 @@ function App() {
       setCommits(repoCommits);
       setRemotes(repoRemotes);
       setAheadBehind(ab);
+      setStashes(repoStashes);
       setRefreshKey((k) => k + 1);
+
+      setSelectedStash((prev) => {
+        if (!prev) return null;
+        return repoStashes.find((s) => s.hash === prev.hash) || null;
+      });
 
       setSelectedCommit((prev) => {
         if (!prev) {
@@ -329,6 +440,89 @@ function App() {
     setActiveView("history");
     refreshAll();
   }, [refreshAll]);
+
+  const handleSelectStash = (stash: StashEntry) => {
+    setSelectedStash(stash);
+    setActiveView("stash");
+  };
+
+  const handleApplyStash = async (stash: StashEntry) => {
+    if (!repoPath || isStashOperating) return;
+    setIsStashOperating(true);
+    try {
+      await stashApply(repoPath, stash.reference);
+      await refreshAll();
+      setFetchToast({
+        message: `Applied ${stash.reference} successfully`,
+        type: "success",
+      });
+      setTimeout(() => setFetchToast(null), 4000);
+    } catch (err: unknown) {
+      const msg = typeof err === "string" ? err : String(err);
+      showError("Apply Stash Failed", msg);
+    } finally {
+      setIsStashOperating(false);
+    }
+  };
+
+  const handlePopStash = async (stash: StashEntry) => {
+    if (!repoPath || isStashOperating) return;
+    setIsStashOperating(true);
+    try {
+      await stashPop(repoPath, stash.reference);
+      if (selectedStash?.hash === stash.hash) {
+        setSelectedStash(null);
+        if (activeView === "stash") {
+          setActiveView("history");
+        }
+      }
+      await refreshAll();
+      setFetchToast({
+        message: `Popped ${stash.reference} successfully`,
+        type: "success",
+      });
+      setTimeout(() => setFetchToast(null), 4000);
+    } catch (err: unknown) {
+      const msg = typeof err === "string" ? err : String(err);
+      showError("Pop Stash Failed", msg);
+    } finally {
+      setIsStashOperating(false);
+    }
+  };
+
+  const handleDropStash = async (stash: StashEntry) => {
+    if (!repoPath || isStashOperating) return;
+    const confirmed = await ask(
+      `Are you sure you want to delete ${stash.reference} ("${stash.message}")?\n\nThis action cannot be undone.`,
+      {
+        title: "Delete Stash",
+        kind: "warning",
+      },
+    );
+    if (!confirmed) return;
+
+    setIsStashOperating(true);
+    try {
+      await stashDrop(repoPath, stash.reference);
+      if (selectedStash?.hash === stash.hash) {
+        setSelectedStash(null);
+        if (activeView === "stash") {
+          setActiveView("history");
+        }
+      }
+      await refreshAll();
+      setFetchToast({
+        message: `Deleted ${stash.reference}`,
+        type: "success",
+      });
+      setTimeout(() => setFetchToast(null), 4000);
+    } catch (err: unknown) {
+      const msg = typeof err === "string" ? err : String(err);
+      showError("Delete Stash Failed", msg);
+    } finally {
+      setIsStashOperating(false);
+    }
+  };
 
   const handleFetch = async () => {
     if (!repoPath || isFetching) return;
@@ -719,7 +913,11 @@ function App() {
             <GitPullRequest size={14} className="text-pink-400" />
             <span>Merge</span>
           </button>
-          <button className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer">
+          <button
+            onClick={() => setIsStashModalOpen(true)}
+            className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer"
+            title="Stash uncommitted changes"
+          >
             <Archive size={14} className="text-orange-400" />
             <span>Stash</span>
           </button>
@@ -894,6 +1092,34 @@ function App() {
                 )}
               </div>
             </div>
+
+            {/* STASHES */}
+            <div>
+              <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1 group">
+                <span className="flex items-center space-x-1.5">
+                  <Archive size={13} className="text-orange-400" />
+                  <span>Stashes ({stashes.length})</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsStashModalOpen(true)}
+                  className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-orange-400 transition cursor-pointer"
+                  title="Stash Changes"
+                >
+                  <Plus size={13} />
+                </button>
+              </div>
+              <div className="mt-1">
+                <StashList
+                  stashes={stashes}
+                  selectedStash={activeView === "stash" ? selectedStash : null}
+                  onSelectStash={handleSelectStash}
+                  onApplyStash={handleApplyStash}
+                  onPopStash={handlePopStash}
+                  onDropStash={handleDropStash}
+                />
+              </div>
+            </div>
           </div>
         </aside>
 
@@ -905,6 +1131,93 @@ function App() {
             onCommitSuccess={handleCommitSuccess}
             onStatusChange={refreshAll}
           />
+        ) : activeView === "stash" && selectedStash ? (
+          /* STASH PREVIEW VIEW */
+          <div className="flex-1 flex flex-col overflow-hidden bg-[#141416]">
+            {/* Stash Header */}
+            <div className="px-4 py-3 bg-[#1c1c1f] border-b border-zinc-800 flex items-center justify-between gap-4 shrink-0">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center space-x-2">
+                  <Archive size={15} className="text-orange-400 shrink-0" />
+                  <span className="font-mono text-xs font-semibold text-orange-300">
+                    {selectedStash.reference}
+                  </span>
+                  {selectedStash.branch && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700 font-medium">
+                      on {selectedStash.branch}
+                    </span>
+                  )}
+                  <span className="text-[11px] text-zinc-500">
+                    {formatDate(selectedStash.timestamp)}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs font-medium text-zinc-100 truncate">
+                  {selectedStash.message}
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-2 shrink-0">
+                <button
+                  onClick={() => handleApplyStash(selectedStash)}
+                  disabled={isStashOperating}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 rounded text-xs font-medium transition cursor-pointer disabled:opacity-50"
+                >
+                  <Play size={13} />
+                  <span>Apply</span>
+                </button>
+                <button
+                  onClick={() => handlePopStash(selectedStash)}
+                  disabled={isStashOperating}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-blue-300 rounded text-xs font-medium transition cursor-pointer disabled:opacity-50"
+                >
+                  <CheckCircle2 size={13} />
+                  <span>Pop</span>
+                </button>
+                <button
+                  onClick={() => handleDropStash(selectedStash)}
+                  disabled={isStashOperating}
+                  className="flex items-center space-x-1.5 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 text-red-300 rounded text-xs font-medium transition cursor-pointer disabled:opacity-50"
+                >
+                  <Trash2 size={13} />
+                  <span>Delete</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Stash Files & Diff Split */}
+            <div className="flex-1 flex min-h-0 overflow-hidden bg-[#1c1c1f] text-xs">
+              <div
+                style={{ width: `${fileListPercent}%` }}
+                className="flex flex-col shrink-0 border-r border-zinc-800 overflow-hidden"
+              >
+                <div className="px-3 py-2 bg-[#1e1e22] border-b border-zinc-800 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider shrink-0">
+                  Stashed Files ({stashFiles.length})
+                </div>
+                <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+                  <FileTree
+                    files={stashFiles}
+                    selectedFile={selectedStashFile}
+                    onSelectFile={(f) => setSelectedStashFile(f)}
+                    loading={loadingStashFiles}
+                  />
+                </div>
+              </div>
+
+              <div
+                onMouseDown={handleHorizontalResize}
+                className="w-1.5 h-full bg-zinc-800 hover:bg-sky-500 active:bg-sky-400 cursor-col-resize shrink-0 transition-colors z-20"
+                title="Drag to resize files width"
+              />
+
+              <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+                <DiffViewer
+                  diffText={stashDiffText}
+                  loading={loadingStashDiff}
+                  filePath={selectedStashFile?.path}
+                />
+              </div>
+            </div>
+          </div>
         ) : (
           /* HISTORY GRAPH VIEW */
           <div className="flex-1 flex flex-col overflow-hidden bg-[#141416]">
@@ -1248,6 +1561,22 @@ function App() {
           onConfirm={handleConfirmCheckout}
         />
       )}
+
+      {/* STASH MODAL */}
+      <StashModal
+        isOpen={isStashModalOpen}
+        onClose={() => setIsStashModalOpen(false)}
+        repoPath={repoPath}
+        currentBranch={summary?.current_branch || null}
+        onSuccess={() => {
+          refreshAll();
+          setFetchToast({
+            message: "Changes stashed successfully",
+            type: "success",
+          });
+          setTimeout(() => setFetchToast(null), 4000);
+        }}
+      />
 
       {/* ERROR MODAL (DISMISSED WITH ACEPTAR BUTTON) */}
       {errorModal && (

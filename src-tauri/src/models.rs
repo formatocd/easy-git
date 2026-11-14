@@ -88,3 +88,13 @@ pub struct AheadBehind {
     pub ahead: usize,
     pub behind: usize,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StashEntry {
+    pub index: usize,
+    pub reference: String,
+    pub branch: String,
+    pub message: String,
+    pub hash: String,
+    pub timestamp: i64,
+}

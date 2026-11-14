@@ -7,7 +7,7 @@ use std::os::windows::process::CommandExt;
 
 use crate::models::{
     AheadBehind, Branch, Commit, CommitWithGraph, FileChange, MergeResult, RemoteInfo, RepoSummary,
-    WorkingFile, WorkingTreeStatus,
+    StashEntry, WorkingFile, WorkingTreeStatus,
 };
 
 #[cfg(windows)]
@@ -1345,4 +1345,252 @@ pub fn abort_merge(repo_path: &str) -> Result<String, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.trim().to_string())
+}
+
+// ---------------------------------------------------------
+// Stash Operations
+// ---------------------------------------------------------
+
+pub fn get_stashes(repo_path: &str) -> Result<Vec<StashEntry>, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let output = create_git_command(repo_path)
+        .args(["stash", "list", "--format=%H%x00%gd%x00%at%x00%s"])
+        .output()
+        .map_err(|e| format!("Failed to list stashes: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut stashes = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\x00').collect();
+        if parts.len() < 4 {
+            continue;
+        }
+
+        let hash = parts[0].trim().to_string();
+        let reference = parts[1].trim().to_string();
+        let timestamp = parts[2].trim().parse::<i64>().unwrap_or(0);
+        let raw_subject = parts[3].trim();
+
+        let index = reference
+            .strip_prefix("stash@{")
+            .and_then(|s| s.strip_suffix('}'))
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(stashes.len());
+
+        let (branch, message) = if let Some((prefix, rest)) = raw_subject.split_once(": ") {
+            let b = prefix
+                .strip_prefix("WIP on ")
+                .or_else(|| prefix.strip_prefix("On "))
+                .unwrap_or(prefix)
+                .trim()
+                .to_string();
+            (b, rest.trim().to_string())
+        } else {
+            ("".to_string(), raw_subject.to_string())
+        };
+
+        stashes.push(StashEntry {
+            index,
+            reference,
+            branch,
+            message,
+            hash,
+            timestamp,
+        });
+    }
+
+    Ok(stashes)
+}
+
+pub fn stash_save(
+    repo_path: &str,
+    message: Option<&str>,
+    include_untracked: bool,
+    keep_index: bool,
+) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["stash", "push"]);
+
+    if include_untracked {
+        cmd.arg("-u");
+    }
+    if keep_index {
+        cmd.arg("--keep-index");
+    }
+    if let Some(msg) = message {
+        if !msg.trim().is_empty() {
+            cmd.args(["-m", msg.trim()]);
+        }
+    }
+
+    let output = cmd.output().map_err(|e| format!("Failed to save stash: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    if !output.status.success() {
+        return Err(if !stderr.trim().is_empty() { stderr } else { stdout });
+    }
+
+    if stdout.contains("No local changes to save") {
+        return Err("No local changes to save.".to_string());
+    }
+
+    Ok(stdout.trim().to_string())
+}
+
+pub fn stash_apply(repo_path: &str, reference: &str) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let output = create_git_command(repo_path)
+        .args(["stash", "apply", reference.trim()])
+        .output()
+        .map_err(|e| format!("Failed to apply stash: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        return Err(if !err.trim().is_empty() { err.to_string() } else { out.to_string() });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub fn stash_pop(repo_path: &str, reference: &str) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let output = create_git_command(repo_path)
+        .args(["stash", "pop", reference.trim()])
+        .output()
+        .map_err(|e| format!("Failed to pop stash: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        return Err(if !err.trim().is_empty() { err.to_string() } else { out.to_string() });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub fn stash_drop(repo_path: &str, reference: &str) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let output = create_git_command(repo_path)
+        .args(["stash", "drop", reference.trim()])
+        .output()
+        .map_err(|e| format!("Failed to drop stash: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        let out = String::from_utf8_lossy(&output.stdout);
+        return Err(if !err.trim().is_empty() { err.to_string() } else { out.to_string() });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub fn get_stash_files(repo_path: &str, reference: &str) -> Result<Vec<FileChange>, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut output = create_git_command(repo_path)
+        .args(["stash", "show", "--name-status", "--include-untracked", reference.trim()])
+        .output()
+        .map_err(|e| format!("Failed to get stash files: {}", e))?;
+
+    if !output.status.success() {
+        output = create_git_command(repo_path)
+            .args(["stash", "show", "--name-status", reference.trim()])
+            .output()
+            .map_err(|e| format!("Failed to get stash files: {}", e))?;
+    }
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut files = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let raw_status = parts[0];
+        let status = raw_status.chars().next().unwrap_or('M').to_string();
+
+        if status == "R" || status == "C" {
+            if parts.len() >= 3 {
+                files.push(FileChange {
+                    path: parts[2].to_string(),
+                    status,
+                    old_path: Some(parts[1].to_string()),
+                });
+            }
+        } else if parts.len() >= 2 {
+            files.push(FileChange {
+                path: parts[1].to_string(),
+                status,
+                old_path: None,
+            });
+        }
+    }
+
+    Ok(files)
+}
+
+pub fn get_stash_file_diff(
+    repo_path: &str,
+    reference: &str,
+    file_path: &str,
+) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut output = create_git_command(repo_path)
+        .args(["stash", "show", "-p", "--include-untracked", "-U3", reference.trim(), "--", file_path])
+        .output()
+        .map_err(|e| format!("Failed to get stash file diff: {}", e))?;
+
+    if !output.status.success() {
+        output = create_git_command(repo_path)
+            .args(["stash", "show", "-p", "-U3", reference.trim(), "--", file_path])
+            .output()
+            .map_err(|e| format!("Failed to get stash file diff: {}", e))?;
+    }
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
