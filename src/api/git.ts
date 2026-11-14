@@ -48,6 +48,13 @@ export interface RepoSummary {
   name: string;
   current_branch: string | null;
   is_clean: boolean;
+  is_merging: boolean;
+}
+
+export interface MergeResult {
+  status: "success" | "already_up_to_date" | "conflict";
+  message: string;
+  conflicts: string[];
 }
 
 export interface FileChange {
@@ -172,6 +179,10 @@ export async function discardFiles(path: string, filePaths: string[]): Promise<v
   return invoke<void>("discard_files", { path, filePaths });
 }
 
+export async function discardAllChanges(path: string): Promise<void> {
+  return invoke<void>("discard_all_changes", { path });
+}
+
 export async function commitChanges(
   path: string,
   message: string,
@@ -293,4 +304,32 @@ export async function deleteRemoteBranch(
   branch: string,
 ): Promise<string> {
   return invoke<string>("delete_remote_branch", { path, remote, branch });
+}
+
+export async function mergeBranch(
+  path: string,
+  branch: string,
+  noFf: boolean = false,
+  squash: boolean = false,
+  message?: string,
+): Promise<MergeResult> {
+  return invoke<MergeResult>("merge_branch", {
+    path,
+    branch,
+    noFf,
+    squash,
+    message: message || null,
+  });
+}
+
+export async function abortMerge(path: string): Promise<string> {
+  return invoke<string>("abort_merge", { path });
+}
+
+export async function isMerging(path: string): Promise<boolean> {
+  return invoke<boolean>("is_merging", { path });
+}
+
+export async function getMergeMessage(path: string): Promise<string | null> {
+  return invoke<string | null>("get_merge_message", { path });
 }

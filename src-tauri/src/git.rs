@@ -1,13 +1,13 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 use crate::models::{
-    AheadBehind, Branch, Commit, CommitWithGraph, FileChange, RemoteInfo, RepoSummary, WorkingFile,
-    WorkingTreeStatus,
+    AheadBehind, Branch, Commit, CommitWithGraph, FileChange, MergeResult, RemoteInfo, RepoSummary,
+    WorkingFile, WorkingTreeStatus,
 };
 
 #[cfg(windows)]
@@ -67,13 +67,15 @@ pub fn get_repo_summary(path: &str) -> Result<RepoSummary, String> {
         .output()
         .map_err(|e| format!("Failed to get repo status: {}", e))?;
 
-    let is_clean = status_output.status.success() && status_output.stdout.is_empty();
+    let is_merging = is_repo_merging(path);
+    let is_clean = !is_merging && status_output.status.success() && status_output.stdout.is_empty();
 
     Ok(RepoSummary {
         path: path.to_string(),
         name,
         current_branch,
         is_clean,
+        is_merging,
     })
 }
 
@@ -405,6 +407,18 @@ pub fn get_working_tree_status(path: &str) -> Result<WorkingTreeStatus, String> 
             continue;
         }
 
+        // Unmerged / Conflicted files (DD, AU, UD, UA, DU, AA, UU)
+        let is_unmerged = x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D');
+        if is_unmerged {
+            unstaged.push(WorkingFile {
+                path: file_path,
+                status: "C".to_string(), // 'C' for Conflict
+                is_staged: false,
+                old_path: None,
+            });
+            continue;
+        }
+
         // Staged part (X)
         if x != ' ' && x != '?' {
             staged.push(WorkingFile {
@@ -436,6 +450,25 @@ pub fn get_working_file_diff(
 ) -> Result<String, String> {
     if !is_git_repo(repo_path) {
         return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    // Check if the file on disk has unresolved merge conflict markers
+    let full_path = Path::new(repo_path).join(file_path);
+    if let Ok(content) = fs::read_to_string(&full_path) {
+        if content.contains("<<<<<<<") && content.contains("=======") && content.contains(">>>>>>>") {
+            let lines: Vec<&str> = content.lines().collect();
+            let mut diff = format!("@@ -1,{} +1,{} @@ [CONFLICT MARKERS]\n", lines.len(), lines.len());
+            for line in lines {
+                if line.starts_with("<<<<<<<") || line.starts_with("=======") || line.starts_with(">>>>>>>") {
+                    diff.push('!');
+                } else {
+                    diff.push(' ');
+                }
+                diff.push_str(line);
+                diff.push('\n');
+            }
+            return Ok(diff);
+        }
     }
 
     if is_staged {
@@ -648,6 +681,31 @@ pub fn discard_files(repo_path: &str, file_paths: Vec<String>) -> Result<(), Str
     for path in file_paths {
         discard_file_changes(repo_path, &path)?;
     }
+
+    Ok(())
+}
+
+pub fn discard_all_changes(repo_path: &str) -> Result<(), String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    if is_repo_merging(repo_path) {
+        let _ = abort_merge(repo_path);
+    }
+
+    let output_reset = create_git_command(repo_path)
+        .args(["reset", "--hard", "HEAD"])
+        .output()
+        .map_err(|e| format!("Failed to reset repository: {}", e))?;
+
+    if !output_reset.status.success() {
+        return Err(String::from_utf8_lossy(&output_reset.stderr).to_string());
+    }
+
+    let _ = create_git_command(repo_path)
+        .args(["clean", "-fd"])
+        .output();
 
     Ok(())
 }
@@ -1122,4 +1180,169 @@ pub fn delete_remote_branch(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{}\n{}", stdout.trim(), stderr.trim());
     Ok(combined.trim().to_string())
+}
+
+// ---------------------------------------------------------
+// Merge Operations
+// ---------------------------------------------------------
+
+pub fn is_repo_merging(repo_path: &str) -> bool {
+    let git_dir_output = create_git_command(repo_path)
+        .args(["rev-parse", "--git-dir"])
+        .output();
+
+    if let Ok(out) = git_dir_output {
+        if out.status.success() {
+            let git_dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let p = Path::new(repo_path);
+            let merge_head = if Path::new(&git_dir).is_absolute() {
+                PathBuf::from(git_dir).join("MERGE_HEAD")
+            } else {
+                p.join(git_dir).join("MERGE_HEAD")
+            };
+            return merge_head.exists();
+        }
+    }
+
+    Path::new(repo_path).join(".git").join("MERGE_HEAD").exists()
+}
+
+pub fn get_merge_message(repo_path: &str) -> Option<String> {
+    let git_dir_output = create_git_command(repo_path)
+        .args(["rev-parse", "--git-dir"])
+        .output();
+
+    let git_dir = if let Ok(out) = git_dir_output {
+        if out.status.success() {
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        } else {
+            ".git".to_string()
+        }
+    } else {
+        ".git".to_string()
+    };
+
+    let p = Path::new(repo_path);
+    let merge_msg = if Path::new(&git_dir).is_absolute() {
+        PathBuf::from(git_dir).join("MERGE_MSG")
+    } else {
+        p.join(git_dir).join("MERGE_MSG")
+    };
+
+    if let Ok(content) = fs::read_to_string(merge_msg) {
+        let trimmed = content.trim().to_string();
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    None
+}
+
+pub fn merge_branch(
+    repo_path: &str,
+    branch: &str,
+    no_ff: bool,
+    squash: bool,
+    message: Option<&str>,
+) -> Result<MergeResult, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.arg("merge");
+
+    if squash {
+        cmd.arg("--squash");
+    } else if no_ff {
+        cmd.arg("--no-ff");
+    }
+
+    if let Some(msg) = message {
+        if !msg.trim().is_empty() {
+            cmd.args(["-m", msg.trim()]);
+        }
+    }
+
+    cmd.arg(branch.trim());
+
+    let output = cmd.output().map_err(|e| format!("Failed to execute git merge: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let combined = format!("{}\n{}", stdout.trim(), stderr.trim()).trim().to_string();
+
+    let merging = is_repo_merging(repo_path);
+
+    if !output.status.success() || merging {
+        let mut conflicts = Vec::new();
+        for line in combined.lines() {
+            if line.contains("CONFLICT (content): Merge conflict in ") {
+                let file = line.replace("CONFLICT (content): Merge conflict in ", "").trim().to_string();
+                conflicts.push(file);
+            } else if line.contains("Merge conflict in ") {
+                if let Some(idx) = line.find("Merge conflict in ") {
+                    let file = line[idx + "Merge conflict in ".len()..].trim().to_string();
+                    conflicts.push(file);
+                }
+            }
+        }
+
+        // Also check git diff --name-only --diff-filter=U to ensure all conflict files are captured
+        if let Ok(unmerged_output) = create_git_command(repo_path)
+            .args(["diff", "--name-only", "--diff-filter=U"])
+            .output()
+        {
+            if unmerged_output.status.success() {
+                let unmerged_stdout = String::from_utf8_lossy(&unmerged_output.stdout);
+                for line in unmerged_stdout.lines() {
+                    let f = line.trim().to_string();
+                    if !f.is_empty() && !conflicts.contains(&f) {
+                        conflicts.push(f);
+                    }
+                }
+            }
+        }
+
+        if !conflicts.is_empty() || merging {
+            return Ok(MergeResult {
+                status: "conflict".to_string(),
+                message: combined,
+                conflicts,
+            });
+        }
+
+        return Err(if !stderr.trim().is_empty() { stderr } else { stdout });
+    }
+
+    if stdout.contains("Already up to date") || stdout.contains("Already up-to-date") {
+        return Ok(MergeResult {
+            status: "already_up_to_date".to_string(),
+            message: combined,
+            conflicts: vec![],
+        });
+    }
+
+    Ok(MergeResult {
+        status: "success".to_string(),
+        message: combined,
+        conflicts: vec![],
+    })
+}
+
+pub fn abort_merge(repo_path: &str) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut cmd = create_git_command(repo_path);
+    cmd.args(["merge", "--abort"]);
+
+    let output = cmd.output().map_err(|e| format!("Failed to abort merge: {}", e))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(if !err.trim().is_empty() { err.to_string() } else { "Failed to abort merge".to_string() });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.trim().to_string())
 }

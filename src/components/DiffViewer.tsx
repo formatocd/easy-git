@@ -7,7 +7,7 @@ interface DiffViewerProps {
 }
 
 interface ParsedLine {
-  type: "chunk" | "add" | "delete" | "context" | "comment";
+  type: "chunk" | "add" | "delete" | "context" | "comment" | "conflict";
   oldLine: number | null;
   newLine: number | null;
   content: string;
@@ -22,16 +22,17 @@ function parseDiff(rawDiff: string): ParsedLine[] {
   let curNewLine = 0;
   let insideHunks = false;
 
-  const hunkRegex = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)/;
+  const standardHunkRegex = /^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@(.*)/;
+  const combinedHunkRegex = /^@@@+\s+.*?\s+@@@+(.*)/;
 
   for (const line of rawLines) {
-    const hunkMatch = line.match(hunkRegex);
-    if (hunkMatch) {
+    const stdMatch = line.match(standardHunkRegex);
+    if (stdMatch) {
       insideHunks = true;
-      const oldStart = parseInt(hunkMatch[1], 10);
-      const oldCount = hunkMatch[2] !== undefined ? parseInt(hunkMatch[2], 10) : 1;
-      const newStart = parseInt(hunkMatch[3], 10);
-      const newCount = hunkMatch[4] !== undefined ? parseInt(hunkMatch[4], 10) : 1;
+      const oldStart = parseInt(stdMatch[1], 10);
+      const oldCount = stdMatch[2] !== undefined ? parseInt(stdMatch[2], 10) : 1;
+      const newStart = parseInt(stdMatch[3], 10);
+      const newCount = stdMatch[4] !== undefined ? parseInt(stdMatch[4], 10) : 1;
 
       curOldLine = oldStart;
       curNewLine = newStart;
@@ -62,24 +63,46 @@ function parseDiff(rawDiff: string): ParsedLine[] {
       continue;
     }
 
+    const combMatch = line.match(combinedHunkRegex);
+    if (combMatch) {
+      insideHunks = true;
+      curOldLine = 1;
+      curNewLine = 1;
+      result.push({
+        type: "chunk",
+        oldLine: 1,
+        newLine: 1,
+        content: line,
+        lineLabel: "Merge Conflict Diff",
+      });
+      continue;
+    }
+
     // Omit raw headers before the first hunk (diff --git, index, ---, +++)
     if (!insideHunks) {
       continue;
     }
 
-    if (line.startsWith("+")) {
+    if (line.startsWith("!")) {
+      result.push({
+        type: "conflict",
+        oldLine: curOldLine++,
+        newLine: curNewLine++,
+        content: line.slice(1),
+      });
+    } else if (line.startsWith("++") || line.startsWith("+")) {
       result.push({
         type: "add",
         oldLine: null,
         newLine: curNewLine++,
-        content: line.slice(1),
+        content: line.startsWith("++") ? line.slice(2) : line.slice(1),
       });
-    } else if (line.startsWith("-")) {
+    } else if (line.startsWith("--") || line.startsWith("-")) {
       result.push({
         type: "delete",
         oldLine: curOldLine++,
         newLine: null,
-        content: line.slice(1),
+        content: line.startsWith("--") ? line.slice(2) : line.slice(1),
       });
     } else if (line.startsWith("\\")) {
       result.push({
@@ -91,8 +114,13 @@ function parseDiff(rawDiff: string): ParsedLine[] {
     } else {
       // Context line
       const content = line.startsWith(" ") ? line.slice(1) : line;
+      const isConflictMarker =
+        content.startsWith("<<<<<<<") ||
+        content.startsWith("=======") ||
+        content.startsWith(">>>>>>>");
+
       result.push({
-        type: "context",
+        type: isConflictMarker ? "conflict" : "context",
         oldLine: curOldLine++,
         newLine: curNewLine++,
         content,
@@ -189,6 +217,11 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({ diffText, loading, fileP
             textClass = "text-rose-300";
             symbol = "-";
             symbolClass = "text-rose-400 font-bold";
+          } else if (line.type === "conflict") {
+            bgClass = "bg-amber-950/60 hover:bg-amber-950/80 border-l-2 border-amber-500";
+            textClass = "text-amber-200 font-bold";
+            symbol = "!";
+            symbolClass = "text-amber-400 font-bold";
           } else if (line.type === "comment") {
             bgClass = "bg-zinc-900/40";
             textClass = "text-zinc-500 italic";

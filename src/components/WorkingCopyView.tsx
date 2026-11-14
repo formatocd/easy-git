@@ -13,6 +13,7 @@ import {
   discardFileChanges,
   discardFiles,
   commitChanges,
+  getMergeMessage,
 } from "../api/git";
 import { DiffViewer } from "./DiffViewer";
 import { WorkingFilesSection } from "./WorkingFilesSection";
@@ -85,6 +86,15 @@ export const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
 
   useEffect(() => {
     refreshStatus();
+    if (repoPath) {
+      getMergeMessage(repoPath)
+        .then((msg) => {
+          if (msg) {
+            setCommitMessage((prev) => (prev.trim() ? prev : msg));
+          }
+        })
+        .catch(() => {});
+    }
   }, [repoPath, refreshKey]);
 
   // Auto-refresh when window regains focus
