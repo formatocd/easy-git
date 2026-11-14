@@ -272,3 +272,9 @@ export const Search: React.FC<IconProps> = ({ size = 16, className = "" }) => (
     <path d="m21 21-4.3-4.3" />
   </svg>
 );
+
+export const Play: React.FC<IconProps> = ({ size = 16, className = "" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    <polygon points="6 3 20 12 6 21 6 3" />
+  </svg>
+);

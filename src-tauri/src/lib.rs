@@ -4,7 +4,7 @@ mod models;
 
 use models::{
     AheadBehind, Branch, Commit, CommitWithGraph, FileChange, RemoteInfo, RepoSummary,
-    WorkingTreeStatus,
+    StashEntry, WorkingTreeStatus,
 };
 
 #[tauri::command]
@@ -227,6 +227,50 @@ fn get_merge_message(path: String) -> Result<Option<String>, String> {
     Ok(git::get_merge_message(&path))
 }
 
+#[tauri::command]
+fn get_stashes(path: String) -> Result<Vec<StashEntry>, String> {
+    git::get_stashes(&path)
+}
+
+#[tauri::command]
+fn stash_save(
+    path: String,
+    message: Option<String>,
+    include_untracked: bool,
+    keep_index: bool,
+) -> Result<String, String> {
+    git::stash_save(&path, message.as_deref(), include_untracked, keep_index)
+}
+
+#[tauri::command]
+fn stash_apply(path: String, reference: String) -> Result<String, String> {
+    git::stash_apply(&path, &reference)
+}
+
+#[tauri::command]
+fn stash_pop(path: String, reference: String) -> Result<String, String> {
+    git::stash_pop(&path, &reference)
+}
+
+#[tauri::command]
+fn stash_drop(path: String, reference: String) -> Result<String, String> {
+    git::stash_drop(&path, &reference)
+}
+
+#[tauri::command]
+fn get_stash_files(path: String, reference: String) -> Result<Vec<FileChange>, String> {
+    git::get_stash_files(&path, &reference)
+}
+
+#[tauri::command]
+fn get_stash_file_diff(
+    path: String,
+    reference: String,
+    file_path: String,
+) -> Result<String, String> {
+    git::get_stash_file_diff(&path, &reference, &file_path)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -268,7 +312,14 @@ pub fn run() {
             merge_branch,
             abort_merge,
             is_merging,
-            get_merge_message
+            get_merge_message,
+            get_stashes,
+            stash_save,
+            stash_apply,
+            stash_pop,
+            stash_drop,
+            get_stash_files,
+            get_stash_file_diff
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

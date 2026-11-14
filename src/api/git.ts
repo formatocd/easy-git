@@ -85,6 +85,15 @@ export interface AheadBehind {
   behind: number;
 }
 
+export interface StashEntry {
+  index: number;
+  reference: string;
+  branch: string;
+  message: string;
+  hash: string;
+  timestamp: number;
+}
+
 export async function isGitRepo(path: string): Promise<boolean> {
   return invoke<boolean>("is_git_repo", { path });
 }
@@ -332,4 +341,46 @@ export async function isMerging(path: string): Promise<boolean> {
 
 export async function getMergeMessage(path: string): Promise<string | null> {
   return invoke<string | null>("get_merge_message", { path });
+}
+
+export async function getStashes(path: string): Promise<StashEntry[]> {
+  return invoke<StashEntry[]>("get_stashes", { path });
+}
+
+export async function stashSave(
+  path: string,
+  message?: string,
+  includeUntracked: boolean = false,
+  keepIndex: boolean = false,
+): Promise<string> {
+  return invoke<string>("stash_save", {
+    path,
+    message: message || null,
+    includeUntracked,
+    keepIndex,
+  });
+}
+
+export async function stashApply(path: string, reference: string): Promise<string> {
+  return invoke<string>("stash_apply", { path, reference });
+}
+
+export async function stashPop(path: string, reference: string): Promise<string> {
+  return invoke<string>("stash_pop", { path, reference });
+}
+
+export async function stashDrop(path: string, reference: string): Promise<string> {
+  return invoke<string>("stash_drop", { path, reference });
+}
+
+export async function getStashFiles(path: string, reference: string): Promise<FileChange[]> {
+  return invoke<FileChange[]>("get_stash_files", { path, reference });
+}
+
+export async function getStashFileDiff(
+  path: string,
+  reference: string,
+  filePath: string,
+): Promise<string> {
+  return invoke<string>("get_stash_file_diff", { path, reference, filePath });
 }
