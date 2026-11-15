@@ -301,6 +301,11 @@ fn push_tag(path: String, remote: String, name: Option<String>) -> Result<String
     git::push_tag(&path, &remote, name.as_deref())
 }
 
+#[tauri::command]
+fn check_remote_tag(path: String, remote: String, name: String) -> Result<bool, String> {
+    git::check_remote_tag(&path, &remote, &name)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -354,7 +359,8 @@ pub fn run() {
             create_tag,
             delete_tag,
             delete_remote_tag,
-            push_tag
+            push_tag,
+            check_remote_tag
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

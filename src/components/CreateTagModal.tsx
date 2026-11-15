@@ -71,6 +71,19 @@ export const CreateTagModal: React.FC<CreateTagModalProps> = ({
     );
   });
 
+  const matchedSpecificCommit = (() => {
+    const h = specificHash.trim().toLowerCase();
+    if (!h) return null;
+    return (
+      realCommits.find(
+        (c) =>
+          c.hash.toLowerCase() === h ||
+          c.short_hash.toLowerCase() === h ||
+          c.hash.toLowerCase().startsWith(h),
+      ) || null
+    );
+  })();
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedName = name.trim();
@@ -216,6 +229,19 @@ export const CreateTagModal: React.FC<CreateTagModalProps> = ({
                       <List size={13} />
                     </button>
                   </div>
+
+                  {matchedSpecificCommit && (
+                    <div className="px-2.5 py-1.5 bg-[#141416] border border-zinc-800 rounded text-[11px] space-y-0.5">
+                      <div className="text-zinc-200 font-medium truncate" title={matchedSpecificCommit.summary}>
+                        {matchedSpecificCommit.summary}
+                      </div>
+                      <div className="text-[10px] text-zinc-500 flex items-center space-x-2">
+                        <span className="font-mono text-amber-400/90">{matchedSpecificCommit.short_hash}</span>
+                        <span>•</span>
+                        <span className="truncate">{matchedSpecificCommit.author_name}</span>
+                      </div>
+                    </div>
+                  )}
 
                   {showCommitPicker && (
                     <div className="bg-[#141416] border border-zinc-700 rounded-md overflow-hidden">

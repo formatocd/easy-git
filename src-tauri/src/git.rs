@@ -1803,3 +1803,22 @@ pub fn push_tag(repo_path: &str, remote: &str, name: Option<&str>) -> Result<Str
         combined
     })
 }
+
+pub fn check_remote_tag(repo_path: &str, remote: &str, name: &str) -> Result<bool, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let ref_spec = format!("refs/tags/{}", name.trim());
+    let output = create_git_command(repo_path)
+        .args(["ls-remote", "--tags", remote.trim(), &ref_spec])
+        .output()
+        .map_err(|e| format!("Failed to check remote tag: {}", e))?;
+
+    if !output.status.success() {
+        return Ok(false);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(!stdout.trim().is_empty())
+}

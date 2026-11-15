@@ -51,6 +51,7 @@ import { StashModal } from "./components/StashModal";
 import { StashList } from "./components/StashList";
 import { CreateTagModal } from "./components/CreateTagModal";
 import { TagList } from "./components/TagList";
+import { DeleteTagModal } from "./components/DeleteTagModal";
 import {
   FolderOpen,
   GitBranch,
@@ -97,6 +98,7 @@ function App() {
   const [isCreateTagOpen, setIsCreateTagOpen] = useState(false);
   const [tagTargetHash, setTagTargetHash] = useState<string | null>(null);
   const [selectedTagName, setSelectedTagName] = useState<string | null>(null);
+  const [deleteTagTarget, setDeleteTagTarget] = useState<TagInfo | null>(null);
   const [commitContextMenu, setCommitContextMenu] = useState<{
     x: number;
     y: number;
@@ -518,29 +520,32 @@ function App() {
     }
   };
 
-  const handleDeleteTag = async (tag: TagInfo) => {
+  const handleDeleteTag = (tag: TagInfo) => {
     if (!repoPath) return;
-    const confirmed = await ask(
-      `Are you sure you want to delete local tag '${tag.name}'?`,
-      {
-        title: "Delete Local Tag",
-        kind: "warning",
-      },
-    );
-    if (!confirmed) return;
+    setDeleteTagTarget(tag);
+  };
 
+  const handleConfirmDeleteTag = async (tag: TagInfo, remotesToDelete: string[]) => {
+    if (!repoPath) return;
     try {
       await deleteTag(repoPath, tag.name);
+      for (const remote of remotesToDelete) {
+        await deleteRemoteTag(repoPath, remote, tag.name);
+      }
       if (selectedTagName === tag.name) {
         setSelectedTagName(null);
       }
       await refreshAll();
       setFetchToast({
-        message: `Deleted tag '${tag.name}'`,
+        message:
+          remotesToDelete.length > 0
+            ? `Deleted tag '${tag.name}' locally and from ${remotesToDelete.join(", ")}`
+            : `Deleted tag '${tag.name}'`,
         type: "success",
       });
       setTimeout(() => setFetchToast(null), 4000);
     } catch (err: unknown) {
+      await refreshAll();
       const msg = typeof err === "string" ? err : String(err);
       showError("Delete Tag Failed", msg);
     }
@@ -1806,6 +1811,16 @@ function App() {
           });
           setTimeout(() => setFetchToast(null), 4000);
         }}
+      />
+
+      {/* DELETE TAG MODAL */}
+      <DeleteTagModal
+        isOpen={!!deleteTagTarget}
+        onClose={() => setDeleteTagTarget(null)}
+        repoPath={repoPath}
+        tag={deleteTagTarget}
+        remotes={remotes}
+        onConfirm={handleConfirmDeleteTag}
       />
 
       {/* STASH MODAL */}

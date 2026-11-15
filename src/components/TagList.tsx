@@ -88,11 +88,24 @@ export const TagList: React.FC<TagListProps> = ({
               />
               <span className="truncate font-medium">{tag.name}</span>
             </div>
-            {shortHash && (
-              <span className="font-mono text-[10px] text-zinc-500 ml-2 shrink-0">
-                {shortHash}
-              </span>
-            )}
+            <div className="flex items-center space-x-1.5 ml-2 shrink-0">
+              {shortHash && (
+                <span className="font-mono text-[10px] text-zinc-500">
+                  {shortHash}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteTag(tag);
+                }}
+                className="p-0.5 rounded text-zinc-500 hover:text-red-400 hover:bg-red-950/40 transition cursor-pointer"
+                title={`Delete tag '${tag.name}'`}
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
           </div>
         );
       })}

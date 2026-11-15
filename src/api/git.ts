@@ -435,3 +435,11 @@ export async function pushTag(
     name: name || null,
   });
 }
+
+export async function checkRemoteTag(
+  path: string,
+  remote: string,
+  name: string,
+): Promise<boolean> {
+  return invoke<boolean>("check_remote_tag", { path, remote, name });
+}
