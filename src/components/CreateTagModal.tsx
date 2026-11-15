@@ -10,7 +10,7 @@ interface CreateTagModalProps {
   commits: CommitWithGraph[];
   remotes: RemoteInfo[];
   initialTargetHash?: string | null;
-  onSuccess: (tagName: string) => void;
+  onSuccess: (tagName: string, pushedToRemote?: string) => void;
 }
 
 export const CreateTagModal: React.FC<CreateTagModalProps> = ({
@@ -109,11 +109,13 @@ export const CreateTagModal: React.FC<CreateTagModalProps> = ({
         message.trim() ? message.trim() : undefined,
       );
 
+      let pushedRemote: string | undefined;
       if (pushImmediately && selectedRemote) {
         await pushTag(repoPath, selectedRemote, trimmedName);
+        pushedRemote = selectedRemote;
       }
 
-      onSuccess(trimmedName);
+      onSuccess(trimmedName, pushedRemote);
       onClose();
     } catch (err: unknown) {
       setError(typeof err === "string" ? err : String(err));

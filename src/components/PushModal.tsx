@@ -10,7 +10,7 @@ interface PushModalProps {
   localBranches: Branch[];
   remotes: RemoteInfo[];
   aheadCount: number;
-  onSuccess: () => void;
+  onSuccess: (output?: string) => void;
 }
 
 export const PushModal: React.FC<PushModalProps> = ({
@@ -60,8 +60,8 @@ export const PushModal: React.FC<PushModalProps> = ({
     setError(null);
 
     try {
-      await pushChanges(repoPath, selectedRemote, selectedBranch, forceWithLease, setUpstream);
-      onSuccess();
+      const output = await pushChanges(repoPath, selectedRemote, selectedBranch, forceWithLease, setUpstream);
+      onSuccess(output);
       onClose();
     } catch (err: unknown) {
       setError(typeof err === "string" ? err : String(err));
