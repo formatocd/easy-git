@@ -1822,3 +1822,159 @@ pub fn check_remote_tag(repo_path: &str, remote: &str, name: &str) -> Result<boo
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(!stdout.trim().is_empty())
 }
+
+// ---------------------------------------------------------
+// Commit Context Actions (Checkout, Cherry-pick, Revert, Reset)
+// ---------------------------------------------------------
+
+pub fn checkout_commit(repo_path: &str, hash: &str) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let output = create_git_command(repo_path)
+        .args(["checkout", hash.trim()])
+        .output()
+        .map_err(|e| format!("Failed to checkout commit: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if !err.is_empty() {
+            err
+        } else {
+            "Failed to checkout commit.".to_string()
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let combined = format!("{}\n{}", stdout, stderr).trim().to_string();
+    Ok(if combined.is_empty() {
+        format!("Checked out commit '{}'", hash.trim())
+    } else {
+        combined
+    })
+}
+
+fn collect_unmerged_conflicts(repo_path: &str) -> Vec<String> {
+    let mut conflicts = Vec::new();
+    if let Ok(unmerged_output) = create_git_command(repo_path)
+        .args(["diff", "--name-only", "--diff-filter=U"])
+        .output()
+    {
+        if unmerged_output.status.success() {
+            let unmerged_stdout = String::from_utf8_lossy(&unmerged_output.stdout);
+            for line in unmerged_stdout.lines() {
+                let f = line.trim().to_string();
+                if !f.is_empty() && !conflicts.contains(&f) {
+                    conflicts.push(f);
+                }
+            }
+        }
+    }
+    conflicts
+}
+
+pub fn cherry_pick_commit(repo_path: &str, hash: &str) -> Result<MergeResult, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let output = create_git_command(repo_path)
+        .args(["cherry-pick", hash.trim()])
+        .output()
+        .map_err(|e| format!("Failed to cherry-pick commit: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let combined = format!("{}\n{}", stdout, stderr).trim().to_string();
+
+    if !output.status.success() {
+        let conflicts = collect_unmerged_conflicts(repo_path);
+        let in_progress = Path::new(repo_path).join(".git/CHERRY_PICK_HEAD").exists();
+        if !conflicts.is_empty() || in_progress {
+            return Ok(MergeResult {
+                status: "conflict".to_string(),
+                message: combined,
+                conflicts,
+            });
+        }
+        return Err(if !stderr.is_empty() { stderr } else { stdout });
+    }
+
+    Ok(MergeResult {
+        status: "success".to_string(),
+        message: combined,
+        conflicts: vec![],
+    })
+}
+
+pub fn revert_commit(repo_path: &str, hash: &str) -> Result<MergeResult, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let output = create_git_command(repo_path)
+        .args(["revert", "--no-edit", hash.trim()])
+        .output()
+        .map_err(|e| format!("Failed to revert commit: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let combined = format!("{}\n{}", stdout, stderr).trim().to_string();
+
+    if !output.status.success() {
+        let conflicts = collect_unmerged_conflicts(repo_path);
+        let in_progress = Path::new(repo_path).join(".git/REVERT_HEAD").exists();
+        if !conflicts.is_empty() || in_progress {
+            return Ok(MergeResult {
+                status: "conflict".to_string(),
+                message: combined,
+                conflicts,
+            });
+        }
+        return Err(if !stderr.is_empty() { stderr } else { stdout });
+    }
+
+    Ok(MergeResult {
+        status: "success".to_string(),
+        message: combined,
+        conflicts: vec![],
+    })
+}
+
+pub fn reset_to_commit(repo_path: &str, hash: &str, mode: &str) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let flag = match mode.trim().to_lowercase().as_str() {
+        "soft" => "--soft",
+        "mixed" => "--mixed",
+        "hard" => "--hard",
+        other => return Err(format!("Invalid reset mode: '{}'", other)),
+    };
+
+    let output = create_git_command(repo_path)
+        .args(["reset", flag, hash.trim()])
+        .output()
+        .map_err(|e| format!("Failed to reset to commit: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if !err.is_empty() {
+            err
+        } else {
+            "Failed to reset to commit.".to_string()
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let combined = format!("{}\n{}", stdout, stderr).trim().to_string();
+    Ok(if combined.is_empty() {
+        format!("Reset ({}) to '{}'", mode, hash.trim())
+    } else {
+        combined
+    })
+}
