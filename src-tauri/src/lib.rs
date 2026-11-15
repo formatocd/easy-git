@@ -4,7 +4,7 @@ mod models;
 
 use models::{
     AheadBehind, Branch, Commit, CommitWithGraph, FileChange, RemoteInfo, RepoSummary,
-    StashEntry, WorkingTreeStatus,
+    StashEntry, TagInfo, WorkingTreeStatus,
 };
 
 #[tauri::command]
@@ -271,6 +271,41 @@ fn get_stash_file_diff(
     git::get_stash_file_diff(&path, &reference, &file_path)
 }
 
+#[tauri::command]
+fn get_tags(path: String) -> Result<Vec<TagInfo>, String> {
+    git::get_tags(&path)
+}
+
+#[tauri::command]
+fn create_tag(
+    path: String,
+    name: String,
+    target: Option<String>,
+    message: Option<String>,
+) -> Result<String, String> {
+    git::create_tag(&path, &name, target.as_deref(), message.as_deref())
+}
+
+#[tauri::command]
+fn delete_tag(path: String, name: String) -> Result<String, String> {
+    git::delete_tag(&path, &name)
+}
+
+#[tauri::command]
+fn delete_remote_tag(path: String, remote: String, name: String) -> Result<String, String> {
+    git::delete_remote_tag(&path, &remote, &name)
+}
+
+#[tauri::command]
+fn push_tag(path: String, remote: String, name: Option<String>) -> Result<String, String> {
+    git::push_tag(&path, &remote, name.as_deref())
+}
+
+#[tauri::command]
+fn check_remote_tag(path: String, remote: String, name: String) -> Result<bool, String> {
+    git::check_remote_tag(&path, &remote, &name)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -319,7 +354,13 @@ pub fn run() {
             stash_pop,
             stash_drop,
             get_stash_files,
-            get_stash_file_diff
+            get_stash_file_diff,
+            get_tags,
+            create_tag,
+            delete_tag,
+            delete_remote_tag,
+            push_tag,
+            check_remote_tag
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

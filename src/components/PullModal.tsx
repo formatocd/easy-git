@@ -9,7 +9,7 @@ interface PullModalProps {
   currentBranch: string | null;
   remotes: RemoteInfo[];
   remoteBranches: Branch[];
-  onSuccess: () => void;
+  onSuccess: (output?: string) => void;
 }
 
 export const PullModal: React.FC<PullModalProps> = ({
@@ -94,8 +94,8 @@ export const PullModal: React.FC<PullModalProps> = ({
     setError(null);
 
     try {
-      await pullChanges(repoPath, selectedRemote, selectedBranch, rebase);
-      onSuccess();
+      const output = await pullChanges(repoPath, selectedRemote, selectedBranch, rebase);
+      onSuccess(output);
       onClose();
     } catch (err: unknown) {
       setError(typeof err === "string" ? err : String(err));

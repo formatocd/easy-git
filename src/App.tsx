@@ -20,6 +20,10 @@ import {
   stashDrop,
   getStashFiles,
   getStashFileDiff,
+  getTags,
+  deleteTag,
+  deleteRemoteTag,
+  pushTag,
   MergeResult,
   RepoSummary,
   CommitWithGraph,
@@ -28,6 +32,7 @@ import {
   RemoteInfo,
   AheadBehind,
   StashEntry,
+  TagInfo,
 } from "./api/git";
 import { GraphCell } from "./components/GraphCell";
 import { DiffViewer } from "./components/DiffViewer";
@@ -44,6 +49,10 @@ import { ErrorModal } from "./components/ErrorModal";
 import { ConfirmCheckoutModal } from "./components/ConfirmCheckoutModal";
 import { StashModal } from "./components/StashModal";
 import { StashList } from "./components/StashList";
+import { CreateTagModal } from "./components/CreateTagModal";
+import { TagList } from "./components/TagList";
+import { DeleteTagModal } from "./components/DeleteTagModal";
+import { OperationModal, OperationModalState } from "./components/OperationModal";
 import {
   FolderOpen,
   GitBranch,
@@ -78,6 +87,7 @@ function App() {
   const [remotes, setRemotes] = useState<RemoteInfo[]>([]);
   const [aheadBehind, setAheadBehind] = useState<AheadBehind>({ ahead: 0, behind: 0 });
   const [stashes, setStashes] = useState<StashEntry[]>([]);
+  const [tags, setTags] = useState<TagInfo[]>([]);
 
   // Modals & Remote Operations State
   const [isPullOpen, setIsPullOpen] = useState(false);
@@ -86,19 +96,34 @@ function App() {
   const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false);
   const [isMergeOpen, setIsMergeOpen] = useState(false);
   const [isStashModalOpen, setIsStashModalOpen] = useState(false);
+  const [isCreateTagOpen, setIsCreateTagOpen] = useState(false);
+  const [tagTargetHash, setTagTargetHash] = useState<string | null>(null);
+  const [selectedTagName, setSelectedTagName] = useState<string | null>(null);
+  const [deleteTagTarget, setDeleteTagTarget] = useState<TagInfo | null>(null);
+  const [commitContextMenu, setCommitContextMenu] = useState<{
+    x: number;
+    y: number;
+    commit: CommitWithGraph;
+  } | null>(null);
   const [mergeSourceBranch, setMergeSourceBranch] = useState<string | null>(null);
   const [isAbortingMerge, setIsAbortingMerge] = useState(false);
   const [checkoutRemoteTarget, setCheckoutRemoteTarget] = useState<Branch | null>(null);
   const [confirmCheckoutTarget, setConfirmCheckoutTarget] = useState<Branch | null>(null);
   const [errorModal, setErrorModal] = useState<{ title: string; message: string } | null>(null);
+  const [operationModal, setOperationModal] = useState<OperationModalState | null>(null);
 
   const showError = useCallback((title: string, message: string) => {
     setErrorModal({ title, message });
   }, []);
+
+  const showToast = useCallback((message: string, type: "success" | "error" = "success", duration = 3500) => {
+    setFetchToast({ message, type });
+    setTimeout(() => setFetchToast(null), duration);
+  }, []);
   const [isFetching, setIsFetching] = useState(false);
   const [fetchToast, setFetchToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [refreshKey, setRefreshKey] = useState<number>(0);
-  const isRefreshingRef = useRef(false);
+  const inFlightRefreshRef = useRef<Promise<void> | null>(null);
 
   // Active view: "history" (Commit DAG), "working_copy" (Staging & Commit), or "stash" (Stash preview)
   const [activeView, setActiveView] = useState<"history" | "working_copy" | "stash">("history");
@@ -150,12 +175,13 @@ function App() {
 
     try {
       const repoSummary = await openRepository(path);
-      const [repoBranches, repoCommits, repoRemotes, ab, repoStashes] = await Promise.all([
+      const [repoBranches, repoCommits, repoRemotes, ab, repoStashes, repoTags] = await Promise.all([
         getBranches(path),
         getCommitGraph(path, 100),
         getRemotes(path).catch(() => []),
         getAheadBehind(path).catch(() => ({ ahead: 0, behind: 0 })),
         getStashes(path).catch(() => []),
+        getTags(path).catch(() => []),
       ]);
 
       setSummary(repoSummary);
@@ -164,6 +190,8 @@ function App() {
       setRemotes(repoRemotes);
       setAheadBehind(ab);
       setStashes(repoStashes);
+      setTags(repoTags);
+      setSelectedTagName(null);
       setSelectedStash(null);
       setStashFiles([]);
       setSelectedStashFile(null);
@@ -362,44 +390,57 @@ function App() {
     loadRepository("D:\\Usuarios\\Carlos\\Proyectos\\Rust\\git_client");
   }, []);
 
-  const refreshAll = useCallback(async () => {
-    if (!repoPath || isRefreshingRef.current) return;
-    isRefreshingRef.current = true;
-    try {
-      const [repoSummary, repoBranches, repoCommits, repoRemotes, ab, repoStashes] = await Promise.all([
-        openRepository(repoPath),
-        getBranches(repoPath),
-        getCommitGraph(repoPath, 100),
-        getRemotes(repoPath).catch(() => []),
-        getAheadBehind(repoPath).catch(() => ({ ahead: 0, behind: 0 })),
-        getStashes(repoPath).catch(() => []),
-      ]);
-
-      setSummary(repoSummary);
-      setBranches(repoBranches);
-      setCommits(repoCommits);
-      setRemotes(repoRemotes);
-      setAheadBehind(ab);
-      setStashes(repoStashes);
-      setRefreshKey((k) => k + 1);
-
-      setSelectedStash((prev) => {
-        if (!prev) return null;
-        return repoStashes.find((s) => s.hash === prev.hash) || null;
-      });
-
-      setSelectedCommit((prev) => {
-        if (!prev) {
-          return repoCommits.find((c) => c.hash !== "uncommitted") || null;
-        }
-        const matching = repoCommits.find((c) => c.hash === prev.hash);
-        return matching || repoCommits.find((c) => c.hash !== "uncommitted") || null;
-      });
-    } catch (err) {
-      console.error("Auto-refresh error:", err);
-    } finally {
-      isRefreshingRef.current = false;
+  const refreshAll = useCallback(async (force = false) => {
+    if (!repoPath) return;
+    if (inFlightRefreshRef.current) {
+      if (!force) {
+        return inFlightRefreshRef.current;
+      }
+      await inFlightRefreshRef.current;
     }
+
+    const promise = (async () => {
+      try {
+        const [repoSummary, repoBranches, repoCommits, repoRemotes, ab, repoStashes, repoTags] = await Promise.all([
+          openRepository(repoPath),
+          getBranches(repoPath),
+          getCommitGraph(repoPath, 100),
+          getRemotes(repoPath).catch(() => []),
+          getAheadBehind(repoPath).catch(() => ({ ahead: 0, behind: 0 })),
+          getStashes(repoPath).catch(() => []),
+          getTags(repoPath).catch(() => []),
+        ]);
+
+        setSummary(repoSummary);
+        setBranches(repoBranches);
+        setCommits(repoCommits);
+        setRemotes(repoRemotes);
+        setAheadBehind(ab);
+        setStashes(repoStashes);
+        setTags(repoTags);
+        setRefreshKey((k) => k + 1);
+
+        setSelectedStash((prev) => {
+          if (!prev) return null;
+          return repoStashes.find((s) => s.hash === prev.hash) || null;
+        });
+
+        setSelectedCommit((prev) => {
+          if (!prev) {
+            return repoCommits.find((c) => c.hash !== "uncommitted") || null;
+          }
+          const matching = repoCommits.find((c) => c.hash === prev.hash);
+          return matching || repoCommits.find((c) => c.hash !== "uncommitted") || null;
+        });
+      } catch (err) {
+        console.error("Auto-refresh error:", err);
+      } finally {
+        inFlightRefreshRef.current = null;
+      }
+    })();
+
+    inFlightRefreshRef.current = promise;
+    return promise;
   }, [repoPath]);
 
   // Auto-refresh when window regains focus, becomes visible, or periodically every 5 seconds
@@ -441,6 +482,168 @@ function App() {
     refreshAll();
   }, [refreshAll]);
 
+  const runOperation = useCallback(
+    async <T,>(options: {
+      title: string;
+      runningMessage: string;
+      errorTitle: string;
+      showResultModal?: boolean;
+      successTitle?: string;
+      getSuccessMessage?: (result: T) => string;
+      getOutput?: (result: T) => string | undefined;
+      action: () => Promise<T>;
+    }): Promise<T | undefined> => {
+      setOperationModal({
+        status: "running",
+        title: options.title,
+        message: options.runningMessage,
+      });
+
+      try {
+        const result = await options.action();
+        await refreshAll(true);
+
+        if (options.showResultModal) {
+          setOperationModal({
+            status: "success",
+            title: options.successTitle || options.title,
+            message: options.getSuccessMessage
+              ? options.getSuccessMessage(result)
+              : "Operation completed successfully.",
+            output: options.getOutput ? options.getOutput(result) : undefined,
+          });
+        } else {
+          setOperationModal(null);
+          if (options.getSuccessMessage) {
+            showToast(options.getSuccessMessage(result), "success");
+          }
+        }
+        return result;
+      } catch (err: unknown) {
+        await refreshAll(true);
+        setOperationModal(null);
+        const msg = typeof err === "string" ? err : String(err);
+        showError(options.errorTitle, msg);
+        return undefined;
+      }
+    },
+    [refreshAll, showError, showToast],
+  );
+
+  useEffect(() => {
+    const closeMenu = () => setCommitContextMenu(null);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCommitContextMenu(null);
+    };
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  const handleOpenCreateTag = (explicitHash?: string | null) => {
+    const target =
+      explicitHash !== undefined
+        ? explicitHash
+        : selectedCommit && selectedCommit.hash !== "uncommitted"
+        ? selectedCommit.hash
+        : null;
+    setTagTargetHash(target);
+    setIsCreateTagOpen(true);
+  };
+
+  const handleSelectTag = (tag: TagInfo) => {
+    setSelectedTagName(tag.name);
+    setActiveView("history");
+    if (tag.target_hash) {
+      const matchingCommit = commits.find(
+        (c) =>
+          c.hash === tag.target_hash ||
+          c.hash.startsWith(tag.target_hash) ||
+          tag.target_hash.startsWith(c.hash),
+      );
+      if (matchingCommit) {
+        setSelectedCommit(matchingCommit);
+      }
+    }
+  };
+
+  const handlePushTag = async (tag: TagInfo, remote: string) => {
+    if (!repoPath) return;
+    await runOperation({
+      title: "Push Tag",
+      runningMessage: `Pushing tag '${tag.name}' to '${remote}'...`,
+      errorTitle: "Push Tag Failed",
+      showResultModal: true,
+      successTitle: "Tag Pushed",
+      getSuccessMessage: () => `Tag '${tag.name}' pushed to '${remote}' successfully.`,
+      getOutput: (out) => out,
+      action: () => pushTag(repoPath, remote, tag.name),
+    });
+  };
+
+  const handleDeleteTag = (tag: TagInfo) => {
+    if (!repoPath) return;
+    setDeleteTagTarget(tag);
+  };
+
+  const handleConfirmDeleteTag = async (tag: TagInfo, remotesToDelete: string[]) => {
+    if (!repoPath) return;
+    const isRemote = remotesToDelete.length > 0;
+    await runOperation({
+      title: "Delete Tag",
+      runningMessage: isRemote
+        ? `Deleting tag '${tag.name}' locally and from ${remotesToDelete.join(", ")}...`
+        : `Deleting local tag '${tag.name}'...`,
+      errorTitle: "Delete Tag Failed",
+      showResultModal: isRemote,
+      successTitle: "Tag Deleted",
+      getSuccessMessage: () =>
+        isRemote
+          ? `Deleted tag '${tag.name}' locally and from ${remotesToDelete.join(", ")}.`
+          : `Deleted tag '${tag.name}'.`,
+      getOutput: (out) => (isRemote ? out : undefined),
+      action: async () => {
+        const outputs: string[] = [];
+        const localOut = await deleteTag(repoPath, tag.name);
+        if (localOut) outputs.push(localOut);
+        for (const remote of remotesToDelete) {
+          const remoteOut = await deleteRemoteTag(repoPath, remote, tag.name);
+          if (remoteOut) outputs.push(remoteOut);
+        }
+        if (selectedTagName === tag.name) {
+          setSelectedTagName(null);
+        }
+        return outputs.join("\n");
+      },
+    });
+  };
+
+  const handleDeleteRemoteTag = async (tag: TagInfo, remote: string) => {
+    if (!repoPath) return;
+    const confirmed = await ask(
+      `Are you sure you want to delete tag '${tag.name}' from remote '${remote}'?`,
+      {
+        title: "Delete Remote Tag",
+        kind: "warning",
+      },
+    );
+    if (!confirmed) return;
+
+    await runOperation({
+      title: "Delete Remote Tag",
+      runningMessage: `Deleting tag '${tag.name}' from '${remote}'...`,
+      errorTitle: "Delete Remote Tag Failed",
+      showResultModal: true,
+      successTitle: "Remote Tag Deleted",
+      getSuccessMessage: () => `Deleted remote tag '${tag.name}' from '${remote}'.`,
+      getOutput: (out) => out,
+      action: () => deleteRemoteTag(repoPath, remote, tag.name),
+    });
+  };
+
   const handleSelectStash = (stash: StashEntry) => {
     setSelectedStash(stash);
     setActiveView("stash");
@@ -450,16 +653,14 @@ function App() {
     if (!repoPath || isStashOperating) return;
     setIsStashOperating(true);
     try {
-      await stashApply(repoPath, stash.reference);
-      await refreshAll();
-      setFetchToast({
-        message: `Applied ${stash.reference} successfully`,
-        type: "success",
+      await runOperation({
+        title: "Apply Stash",
+        runningMessage: `Applying ${stash.reference}...`,
+        errorTitle: "Apply Stash Failed",
+        showResultModal: false,
+        getSuccessMessage: () => `Applied ${stash.reference} successfully.`,
+        action: () => stashApply(repoPath, stash.reference),
       });
-      setTimeout(() => setFetchToast(null), 4000);
-    } catch (err: unknown) {
-      const msg = typeof err === "string" ? err : String(err);
-      showError("Apply Stash Failed", msg);
     } finally {
       setIsStashOperating(false);
     }
@@ -469,22 +670,23 @@ function App() {
     if (!repoPath || isStashOperating) return;
     setIsStashOperating(true);
     try {
-      await stashPop(repoPath, stash.reference);
-      if (selectedStash?.hash === stash.hash) {
-        setSelectedStash(null);
-        if (activeView === "stash") {
-          setActiveView("history");
-        }
-      }
-      await refreshAll();
-      setFetchToast({
-        message: `Popped ${stash.reference} successfully`,
-        type: "success",
+      await runOperation({
+        title: "Pop Stash",
+        runningMessage: `Popping ${stash.reference}...`,
+        errorTitle: "Pop Stash Failed",
+        showResultModal: false,
+        getSuccessMessage: () => `Popped ${stash.reference} successfully.`,
+        action: async () => {
+          const out = await stashPop(repoPath, stash.reference);
+          if (selectedStash?.hash === stash.hash) {
+            setSelectedStash(null);
+            if (activeView === "stash") {
+              setActiveView("history");
+            }
+          }
+          return out;
+        },
       });
-      setTimeout(() => setFetchToast(null), 4000);
-    } catch (err: unknown) {
-      const msg = typeof err === "string" ? err : String(err);
-      showError("Pop Stash Failed", msg);
     } finally {
       setIsStashOperating(false);
     }
@@ -503,22 +705,23 @@ function App() {
 
     setIsStashOperating(true);
     try {
-      await stashDrop(repoPath, stash.reference);
-      if (selectedStash?.hash === stash.hash) {
-        setSelectedStash(null);
-        if (activeView === "stash") {
-          setActiveView("history");
-        }
-      }
-      await refreshAll();
-      setFetchToast({
-        message: `Deleted ${stash.reference}`,
-        type: "success",
+      await runOperation({
+        title: "Delete Stash",
+        runningMessage: `Deleting ${stash.reference}...`,
+        errorTitle: "Delete Stash Failed",
+        showResultModal: false,
+        getSuccessMessage: () => `Deleted ${stash.reference}.`,
+        action: async () => {
+          const out = await stashDrop(repoPath, stash.reference);
+          if (selectedStash?.hash === stash.hash) {
+            setSelectedStash(null);
+            if (activeView === "stash") {
+              setActiveView("history");
+            }
+          }
+          return out;
+        },
       });
-      setTimeout(() => setFetchToast(null), 4000);
-    } catch (err: unknown) {
-      const msg = typeof err === "string" ? err : String(err);
-      showError("Delete Stash Failed", msg);
     } finally {
       setIsStashOperating(false);
     }
@@ -530,14 +733,16 @@ function App() {
     setFetchToast(null);
 
     try {
-      await fetchRemote(repoPath);
-      await refreshAll();
-      setFetchToast({ message: "Fetch completed successfully.", type: "success" });
-      setTimeout(() => setFetchToast(null), 3000);
-    } catch (err: unknown) {
-      await refreshAll();
-      const msg = typeof err === "string" ? err : String(err);
-      showError("Fetch Error", msg);
+      await runOperation({
+        title: "Fetch Remotes",
+        runningMessage: "Fetching branches and tags from all remotes...",
+        errorTitle: "Fetch Error",
+        showResultModal: true,
+        successTitle: "Fetch Completed",
+        getSuccessMessage: () => "Fetch completed successfully.",
+        getOutput: (out) => out,
+        action: () => fetchRemote(repoPath),
+      });
     } finally {
       setIsFetching(false);
     }
@@ -552,13 +757,19 @@ function App() {
       return;
     }
 
+    setOperationModal({
+      status: "running",
+      title: "Switch Branch",
+      message: `Switching to branch '${branch.name}'...`,
+    });
     try {
       await checkoutBranch(repoPath, branch.name);
-      await refreshAll();
-      setFetchToast({ message: `Switched to branch '${branch.name}'.`, type: "success" });
-      setTimeout(() => setFetchToast(null), 3000);
+      await refreshAll(true);
+      setOperationModal(null);
+      showToast(`Switched to branch '${branch.name}'.`, "success");
     } catch (err: unknown) {
-      await refreshAll();
+      await refreshAll(true);
+      setOperationModal(null);
       const msg = typeof err === "string" ? err : String(err);
       if (
         msg.toLowerCase().includes("overwritten by checkout") ||
@@ -577,19 +788,21 @@ function App() {
     const targetBranchName = confirmCheckoutTarget.name;
     setConfirmCheckoutTarget(null);
 
-    try {
-      if (discardChanges) {
-        await discardAllChanges(repoPath);
-      }
-      await checkoutBranch(repoPath, targetBranchName);
-      await refreshAll();
-      setFetchToast({ message: `Switched to branch '${targetBranchName}'.`, type: "success" });
-      setTimeout(() => setFetchToast(null), 3000);
-    } catch (err: unknown) {
-      await refreshAll();
-      const msg = typeof err === "string" ? err : String(err);
-      showError("Checkout Branch Error", msg);
-    }
+    await runOperation({
+      title: "Switch Branch",
+      runningMessage: discardChanges
+        ? `Discarding uncommitted changes and switching to '${targetBranchName}'...`
+        : `Switching to branch '${targetBranchName}'...`,
+      errorTitle: "Checkout Branch Error",
+      showResultModal: false,
+      getSuccessMessage: () => `Switched to branch '${targetBranchName}'.`,
+      action: async () => {
+        if (discardChanges) {
+          await discardAllChanges(repoPath);
+        }
+        await checkoutBranch(repoPath, targetBranchName);
+      },
+    });
   };
 
   const handleCheckoutRemoteBranch = (branch: Branch) => {
@@ -610,11 +823,18 @@ function App() {
       );
       if (!confirmed) return;
 
+      setOperationModal({
+        status: "running",
+        title: "Delete Branch",
+        message: `Deleting local branch '${branch.name}'...`,
+      });
+
       try {
         await deleteBranch(repoPath, branch.name, false);
       } catch (err: unknown) {
         const errMsg = typeof err === "string" ? err : String(err);
         if (errMsg.toLowerCase().includes("not fully merged") || errMsg.toLowerCase().includes("-d")) {
+          setOperationModal(null);
           const forceConfirmed = await ask(
             `Branch '${branch.name}' is not fully merged.\n\nDo you want to force delete it (git branch -D)?`,
             {
@@ -625,6 +845,11 @@ function App() {
             }
           );
           if (forceConfirmed) {
+            setOperationModal({
+              status: "running",
+              title: "Force Delete Branch",
+              message: `Force deleting local branch '${branch.name}'...`,
+            });
             await deleteBranch(repoPath, branch.name, true);
           } else {
             return;
@@ -634,10 +859,12 @@ function App() {
         }
       }
 
-      await refreshAll();
-      setFetchToast({ message: `Branch '${branch.name}' deleted.`, type: "success" });
-      setTimeout(() => setFetchToast(null), 3000);
+      await refreshAll(true);
+      setOperationModal(null);
+      showToast(`Branch '${branch.name}' deleted.`, "success");
     } catch (err: unknown) {
+      await refreshAll(true);
+      setOperationModal(null);
       const msg = typeof err === "string" ? err : String(err);
       showError("Delete Branch Error", msg);
     }
@@ -645,36 +872,35 @@ function App() {
 
   const handleDeleteRemoteBranch = async (branch: Branch) => {
     if (!repoPath) return;
-    try {
-      const slashIdx = branch.name.indexOf("/");
-      if (slashIdx === -1) {
-        throw new Error(`Invalid remote branch format: ${branch.name}`);
-      }
-      const remoteName = branch.name.slice(0, slashIdx);
-      const remoteBranchName = branch.name.slice(slashIdx + 1);
-
-      const confirmed = await ask(
-        `Are you sure you want to delete remote branch '${remoteBranchName}' from remote '${remoteName}'?\n\nThis will permanently delete the branch from the remote server.`,
-        {
-          title: "Delete Remote Branch",
-          kind: "warning",
-          okLabel: "Delete on Remote",
-          cancelLabel: "Cancel",
-        }
-      );
-      if (!confirmed) return;
-
-      await deleteRemoteBranch(repoPath, remoteName, remoteBranchName);
-      await refreshAll();
-      setFetchToast({
-        message: `Remote branch '${remoteBranchName}' deleted from '${remoteName}'.`,
-        type: "success",
-      });
-      setTimeout(() => setFetchToast(null), 3000);
-    } catch (err: unknown) {
-      const msg = typeof err === "string" ? err : String(err);
-      showError("Delete Remote Branch Error", msg);
+    const slashIdx = branch.name.indexOf("/");
+    if (slashIdx === -1) {
+      showError("Delete Remote Branch Error", `Invalid remote branch format: ${branch.name}`);
+      return;
     }
+    const remoteName = branch.name.slice(0, slashIdx);
+    const remoteBranchName = branch.name.slice(slashIdx + 1);
+
+    const confirmed = await ask(
+      `Are you sure you want to delete remote branch '${remoteBranchName}' from remote '${remoteName}'?\n\nThis will permanently delete the branch from the remote server.`,
+      {
+        title: "Delete Remote Branch",
+        kind: "warning",
+        okLabel: "Delete on Remote",
+        cancelLabel: "Cancel",
+      }
+    );
+    if (!confirmed) return;
+
+    await runOperation({
+      title: "Delete Remote Branch",
+      runningMessage: `Deleting '${remoteBranchName}' from remote '${remoteName}'...`,
+      errorTitle: "Delete Remote Branch Error",
+      showResultModal: true,
+      successTitle: "Remote Branch Deleted",
+      getSuccessMessage: () => `Remote branch '${remoteBranchName}' deleted from '${remoteName}'.`,
+      getOutput: (out) => out,
+      action: () => deleteRemoteBranch(repoPath, remoteName, remoteBranchName),
+    });
   };
 
   const handleOpenMerge = (sourceBranch?: string) => {
@@ -685,18 +911,27 @@ function App() {
   const handleMergeSuccess = async (result: MergeResult) => {
     await refreshAll();
     if (result.status === "success") {
-      setFetchToast({ message: "Merge completed successfully.", type: "success" });
-      setTimeout(() => setFetchToast(null), 3500);
-    } else if (result.status === "already_up_to_date") {
-      setFetchToast({ message: "Already up to date. No changes to merge.", type: "success" });
-      setTimeout(() => setFetchToast(null), 3500);
-    } else if (result.status === "conflict") {
-      setFetchToast({
-        message: `Merge conflict in ${result.conflicts.length} files. Please resolve conflicts or abort merge.`,
-        type: "error",
+      setOperationModal({
+        status: "success",
+        title: "Merge Completed",
+        message: "Merge completed successfully.",
+        output: result.message,
       });
-      setTimeout(() => setFetchToast(null), 6000);
+    } else if (result.status === "already_up_to_date") {
+      setOperationModal({
+        status: "success",
+        title: "Merge Up to Date",
+        message: "Already up to date. No changes to merge.",
+        output: result.message,
+      });
+    } else if (result.status === "conflict") {
       setActiveView("working_copy");
+      setOperationModal({
+        status: "success",
+        title: "Merge Conflicts Detected",
+        message: `Merge conflict in ${result.conflicts.length} file(s). Please resolve conflicts in File Status or abort the merge.`,
+        output: result.conflicts.join("\n"),
+      });
     }
   };
 
@@ -715,13 +950,16 @@ function App() {
 
     setIsAbortingMerge(true);
     try {
-      await abortMerge(repoPath);
-      await refreshAll();
-      setFetchToast({ message: "Merge aborted cleanly.", type: "success" });
-      setTimeout(() => setFetchToast(null), 3000);
-    } catch (err: unknown) {
-      const msg = typeof err === "string" ? err : String(err);
-      showError("Abort Merge Error", msg);
+      await runOperation({
+        title: "Abort Merge",
+        runningMessage: "Aborting merge and restoring working tree...",
+        errorTitle: "Abort Merge Error",
+        showResultModal: true,
+        successTitle: "Merge Aborted",
+        getSuccessMessage: () => "Merge aborted cleanly.",
+        getOutput: (out) => out,
+        action: () => abortMerge(repoPath),
+      });
     } finally {
       setIsAbortingMerge(false);
     }
@@ -921,6 +1159,14 @@ function App() {
             <Archive size={14} className="text-orange-400" />
             <span>Stash</span>
           </button>
+          <button
+            onClick={() => handleOpenCreateTag()}
+            className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer"
+            title="Create tag on selected commit"
+          >
+            <Tag size={14} className="text-amber-400" />
+            <span>Tag</span>
+          </button>
         </div>
 
         {summary && (
@@ -1093,6 +1339,35 @@ function App() {
               </div>
             </div>
 
+            {/* TAGS */}
+            <div>
+              <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1 group">
+                <span className="flex items-center space-x-1.5">
+                  <Tag size={13} className="text-amber-400" />
+                  <span>Tags ({tags.length})</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleOpenCreateTag()}
+                  className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-amber-400 transition cursor-pointer"
+                  title="Create Tag"
+                >
+                  <Plus size={13} />
+                </button>
+              </div>
+              <div className="mt-1">
+                <TagList
+                  tags={tags}
+                  remotes={remotes}
+                  selectedTagName={activeView === "history" ? selectedTagName : null}
+                  onSelectTag={handleSelectTag}
+                  onPushTag={handlePushTag}
+                  onDeleteTag={handleDeleteTag}
+                  onDeleteRemoteTag={handleDeleteRemoteTag}
+                />
+              </div>
+            </div>
+
             {/* STASHES */}
             <div>
               <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1 group">
@@ -1253,6 +1528,16 @@ function App() {
                             setSelectedCommit(c);
                           }
                         }}
+                        onContextMenu={(e) => {
+                          if (isUncommitted) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const menuWidth = 210;
+                          const menuHeight = 110;
+                          const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
+                          const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
+                          setCommitContextMenu({ x, y, commit: c });
+                        }}
                         className={`cursor-pointer transition-colors ${
                           isSelected
                             ? "bg-blue-600/20 text-white"
@@ -1284,20 +1569,27 @@ function App() {
                               </span>
                             ) : (
                               <>
-                                {c.refs.map((ref) => (
-                                  <span
-                                    key={ref}
-                                    className={`text-[9px] px-1.5 py-0.2 rounded-full font-semibold shrink-0 ${
-                                      ref.includes("HEAD")
-                                        ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
-                                        : ref.includes("origin/")
-                                        ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
-                                        : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                                    }`}
-                                  >
-                                    {ref}
-                                  </span>
-                                ))}
+                                {c.refs.map((ref) => {
+                                  const isTag = ref.startsWith("tag: ");
+                                  const displayRef = isTag ? ref.slice(5) : ref;
+                                  return (
+                                    <span
+                                      key={ref}
+                                      className={`text-[9px] px-1.5 py-0.2 rounded-full font-semibold shrink-0 inline-flex items-center space-x-1 ${
+                                        ref.includes("HEAD")
+                                          ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
+                                          : isTag
+                                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                                          : ref.includes("origin/")
+                                          ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                                          : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                                      }`}
+                                    >
+                                      {isTag && <Tag size={9} className="shrink-0" />}
+                                      <span>{displayRef}</span>
+                                    </span>
+                                  );
+                                })}
                                 <span className="truncate">{c.summary}</span>
                               </>
                             )}
@@ -1479,8 +1771,14 @@ function App() {
         currentBranch={summary?.current_branch || null}
         remotes={remotes}
         remoteBranches={remoteBranches}
-        onSuccess={() => {
+        onSuccess={(output) => {
           refreshAll();
+          setOperationModal({
+            status: "success",
+            title: "Pull Completed",
+            message: "Changes pulled from remote successfully.",
+            output,
+          });
         }}
       />
 
@@ -1493,8 +1791,14 @@ function App() {
         localBranches={localBranches}
         remotes={remotes}
         aheadCount={aheadBehind.ahead}
-        onSuccess={() => {
+        onSuccess={(output) => {
           refreshAll();
+          setOperationModal({
+            status: "success",
+            title: "Push Completed",
+            message: "Changes pushed to remote successfully.",
+            output,
+          });
         }}
       />
 
@@ -1562,6 +1866,82 @@ function App() {
         />
       )}
 
+      {/* COMMIT CONTEXT MENU */}
+      {commitContextMenu && (
+        <div
+          style={{ top: commitContextMenu.y, left: commitContextMenu.x }}
+          className="fixed z-50 w-52 bg-zinc-900 border border-zinc-700 rounded-md shadow-2xl py-1 text-xs text-zinc-200"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1.5 text-[10px] text-zinc-500 border-b border-zinc-800 font-mono truncate">
+            {commitContextMenu.commit.short_hash} · {commitContextMenu.commit.summary}
+          </div>
+          <button
+            onClick={() => {
+              const targetHash = commitContextMenu.commit.hash;
+              setCommitContextMenu(null);
+              handleOpenCreateTag(targetHash);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-zinc-800 flex items-center space-x-2 cursor-pointer transition-colors"
+          >
+            <Tag size={13} className="text-amber-400" />
+            <span>Tag...</span>
+          </button>
+          <button
+            onClick={() => {
+              const hash = commitContextMenu.commit.hash;
+              setCommitContextMenu(null);
+              navigator.clipboard.writeText(hash);
+              setFetchToast({
+                message: `Copied hash ${commitContextMenu.commit.short_hash}`,
+                type: "success",
+              });
+              setTimeout(() => setFetchToast(null), 2500);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-zinc-800 flex items-center space-x-2 cursor-pointer transition-colors"
+          >
+            <Copy size={13} className="text-zinc-400" />
+            <span>Copy Commit Hash</span>
+          </button>
+        </div>
+      )}
+
+      {/* CREATE TAG MODAL */}
+      <CreateTagModal
+        isOpen={isCreateTagOpen}
+        onClose={() => {
+          setIsCreateTagOpen(false);
+          setTagTargetHash(null);
+        }}
+        repoPath={repoPath}
+        currentBranch={summary?.current_branch || null}
+        commits={commits}
+        remotes={remotes}
+        initialTargetHash={tagTargetHash}
+        onSuccess={(tagName, pushedToRemote) => {
+          refreshAll();
+          if (pushedToRemote) {
+            setOperationModal({
+              status: "success",
+              title: "Tag Created & Pushed",
+              message: `Tag '${tagName}' was created and pushed to '${pushedToRemote}' successfully.`,
+            });
+          } else {
+            showToast(`Tag '${tagName}' created successfully`, "success");
+          }
+        }}
+      />
+
+      {/* DELETE TAG MODAL */}
+      <DeleteTagModal
+        isOpen={!!deleteTagTarget}
+        onClose={() => setDeleteTagTarget(null)}
+        repoPath={repoPath}
+        tag={deleteTagTarget}
+        remotes={remotes}
+        onConfirm={handleConfirmDeleteTag}
+      />
+
       {/* STASH MODAL */}
       <StashModal
         isOpen={isStashModalOpen}
@@ -1576,6 +1956,12 @@ function App() {
           });
           setTimeout(() => setFetchToast(null), 4000);
         }}
+      />
+
+      {/* OPERATION PROGRESS / RESULT MODAL */}
+      <OperationModal
+        state={operationModal}
+        onClose={() => setOperationModal(null)}
       />
 
       {/* ERROR MODAL (DISMISSED WITH ACEPTAR BUTTON) */}

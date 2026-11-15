@@ -98,3 +98,13 @@ pub struct StashEntry {
     pub hash: String,
     pub timestamp: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagInfo {
+    pub name: String,
+    pub target_hash: String,
+    pub message: String,
+    pub is_annotated: bool,
+    pub tagger: String,
+    pub timestamp: i64,
+}
