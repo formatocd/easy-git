@@ -3,7 +3,7 @@ mod graph;
 mod models;
 
 use models::{
-    AheadBehind, Branch, Commit, CommitWithGraph, FileChange, RemoteInfo, RepoSummary,
+    AheadBehind, Branch, Commit, CommitWithGraph, FileChange, MergeResult, RemoteInfo, RepoSummary,
     StashEntry, TagInfo, WorkingTreeStatus,
 };
 
@@ -306,6 +306,26 @@ fn check_remote_tag(path: String, remote: String, name: String) -> Result<bool, 
     git::check_remote_tag(&path, &remote, &name)
 }
 
+#[tauri::command]
+fn checkout_commit(path: String, hash: String) -> Result<String, String> {
+    git::checkout_commit(&path, &hash)
+}
+
+#[tauri::command]
+fn cherry_pick_commit(path: String, hash: String) -> Result<MergeResult, String> {
+    git::cherry_pick_commit(&path, &hash)
+}
+
+#[tauri::command]
+fn revert_commit(path: String, hash: String) -> Result<MergeResult, String> {
+    git::revert_commit(&path, &hash)
+}
+
+#[tauri::command]
+fn reset_to_commit(path: String, hash: String, mode: String) -> Result<String, String> {
+    git::reset_to_commit(&path, &hash, &mode)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -360,7 +380,11 @@ pub fn run() {
             delete_tag,
             delete_remote_tag,
             push_tag,
-            check_remote_tag
+            check_remote_tag,
+            checkout_commit,
+            cherry_pick_commit,
+            revert_commit,
+            reset_to_commit
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -443,3 +443,23 @@ export async function checkRemoteTag(
 ): Promise<boolean> {
   return invoke<boolean>("check_remote_tag", { path, remote, name });
 }
+
+export async function checkoutCommit(path: string, hash: string): Promise<string> {
+  return invoke<string>("checkout_commit", { path, hash });
+}
+
+export async function cherryPickCommit(path: string, hash: string): Promise<MergeResult> {
+  return invoke<MergeResult>("cherry_pick_commit", { path, hash });
+}
+
+export async function revertCommit(path: string, hash: string): Promise<MergeResult> {
+  return invoke<MergeResult>("revert_commit", { path, hash });
+}
+
+export async function resetToCommit(
+  path: string,
+  hash: string,
+  mode: "soft" | "mixed" | "hard",
+): Promise<string> {
+  return invoke<string>("reset_to_commit", { path, hash, mode });
+}

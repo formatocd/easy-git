@@ -24,6 +24,10 @@ import {
   deleteTag,
   deleteRemoteTag,
   pushTag,
+  checkoutCommit,
+  cherryPickCommit,
+  revertCommit,
+  resetToCommit,
   MergeResult,
   RepoSummary,
   CommitWithGraph,
@@ -53,6 +57,7 @@ import { CreateTagModal } from "./components/CreateTagModal";
 import { TagList } from "./components/TagList";
 import { DeleteTagModal } from "./components/DeleteTagModal";
 import { OperationModal, OperationModalState } from "./components/OperationModal";
+import { ResetCommitModal } from "./components/ResetCommitModal";
 import {
   FolderOpen,
   GitBranch,
@@ -75,6 +80,7 @@ import {
   Plus,
   Play,
   Trash2,
+  Undo2,
 } from "./components/Icons";
 import "./App.css";
 
@@ -100,6 +106,9 @@ function App() {
   const [tagTargetHash, setTagTargetHash] = useState<string | null>(null);
   const [selectedTagName, setSelectedTagName] = useState<string | null>(null);
   const [deleteTagTarget, setDeleteTagTarget] = useState<TagInfo | null>(null);
+  const [branchBaseCommit, setBranchBaseCommit] = useState<CommitWithGraph | null>(null);
+  const [branchBaseOption, setBranchBaseOption] = useState<"head" | "commit">("head");
+  const [resetTargetCommit, setResetTargetCommit] = useState<CommitWithGraph | null>(null);
   const [commitContextMenu, setCommitContextMenu] = useState<{
     x: number;
     y: number;
@@ -552,6 +561,116 @@ function App() {
         : null;
     setTagTargetHash(target);
     setIsCreateTagOpen(true);
+  };
+
+  const handleCheckoutCommit = async (commit: CommitWithGraph) => {
+    if (!repoPath) return;
+    const confirmed = await ask(
+      `Check out commit ${commit.short_hash} ("${commit.summary}")?\n\nThis will put your repository into a detached HEAD state.`,
+      {
+        title: "Checkout Commit",
+        kind: "warning",
+        okLabel: "Checkout",
+        cancelLabel: "Cancel",
+      },
+    );
+    if (!confirmed) return;
+
+    await runOperation({
+      title: "Checkout Commit",
+      runningMessage: `Checking out commit ${commit.short_hash}...`,
+      errorTitle: "Checkout Commit Error",
+      showResultModal: false,
+      getSuccessMessage: () => `Checked out commit ${commit.short_hash} (detached HEAD).`,
+      action: () => checkoutCommit(repoPath, commit.hash),
+    });
+  };
+
+  const handleCreateBranchFromCommit = (commit: CommitWithGraph) => {
+    setBranchBaseCommit(commit);
+    setBranchBaseOption("commit");
+    setIsCreateBranchOpen(true);
+  };
+
+  const handleCherryPickCommit = async (commit: CommitWithGraph) => {
+    if (!repoPath) return;
+    const confirmed = await ask(
+      `Cherry-pick commit ${commit.short_hash} ("${commit.summary}") onto '${summary?.current_branch || "HEAD"}'?`,
+      {
+        title: "Cherry-pick Commit",
+        kind: "info",
+        okLabel: "Cherry-pick",
+        cancelLabel: "Cancel",
+      },
+    );
+    if (!confirmed) return;
+
+    const res = await runOperation({
+      title: "Cherry-pick Commit",
+      runningMessage: `Cherry-picking ${commit.short_hash}...`,
+      errorTitle: "Cherry-pick Error",
+      showResultModal: true,
+      successTitle: "Cherry-pick Completed",
+      getSuccessMessage: (r) =>
+        r.status === "conflict"
+          ? `Cherry-pick resulted in conflicts in ${r.conflicts.length} file(s). Please resolve them in File Status.`
+          : `Cherry-picked ${commit.short_hash} successfully.`,
+      getOutput: (r) => (r.status === "conflict" ? r.conflicts.join("\n") : r.message),
+      action: () => cherryPickCommit(repoPath, commit.hash),
+    });
+
+    if (res?.status === "conflict") {
+      setActiveView("working_copy");
+    }
+  };
+
+  const handleRevertCommit = async (commit: CommitWithGraph) => {
+    if (!repoPath) return;
+    const confirmed = await ask(
+      `Revert commit ${commit.short_hash} ("${commit.summary}")?\n\nThis will create a new commit that undoes the changes introduced by ${commit.short_hash}.`,
+      {
+        title: "Revert Commit",
+        kind: "warning",
+        okLabel: "Revert",
+        cancelLabel: "Cancel",
+      },
+    );
+    if (!confirmed) return;
+
+    const res = await runOperation({
+      title: "Revert Commit",
+      runningMessage: `Reverting ${commit.short_hash}...`,
+      errorTitle: "Revert Commit Error",
+      showResultModal: true,
+      successTitle: "Commit Reverted",
+      getSuccessMessage: (r) =>
+        r.status === "conflict"
+          ? `Revert resulted in conflicts in ${r.conflicts.length} file(s). Please resolve them in File Status.`
+          : `Reverted ${commit.short_hash} successfully.`,
+      getOutput: (r) => (r.status === "conflict" ? r.conflicts.join("\n") : r.message),
+      action: () => revertCommit(repoPath, commit.hash),
+    });
+
+    if (res?.status === "conflict") {
+      setActiveView("working_copy");
+    }
+  };
+
+  const handleConfirmResetCommit = async (
+    commit: CommitWithGraph,
+    mode: "soft" | "mixed" | "hard",
+  ) => {
+    if (!repoPath) return;
+    await runOperation({
+      title: "Reset Branch",
+      runningMessage: `Resetting (${mode}) to ${commit.short_hash}...`,
+      errorTitle: "Reset Error",
+      showResultModal: true,
+      successTitle: "Reset Completed",
+      getSuccessMessage: () => `Branch reset (${mode}) to ${commit.short_hash}.`,
+      getOutput: (out) => out,
+      action: () => resetToCommit(repoPath, commit.hash, mode),
+    });
   };
 
   const handleSelectTag = (tag: TagInfo) => {
@@ -1532,8 +1651,8 @@ function App() {
                           if (isUncommitted) return;
                           e.preventDefault();
                           e.stopPropagation();
-                          const menuWidth = 210;
-                          const menuHeight = 110;
+                          const menuWidth = 230;
+                          const menuHeight = 270;
                           const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
                           const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
                           setCommitContextMenu({ x, y, commit: c });
@@ -1816,12 +1935,17 @@ function App() {
       {/* CREATE BRANCH MODAL */}
       <CreateBranchModal
         isOpen={isCreateBranchOpen}
-        onClose={() => setIsCreateBranchOpen(false)}
+        onClose={() => {
+          setIsCreateBranchOpen(false);
+          setBranchBaseCommit(null);
+          setBranchBaseOption("head");
+        }}
         repoPath={repoPath}
         currentBranch={summary?.current_branch || null}
-        currentCommit={selectedCommit}
+        currentCommit={branchBaseCommit || selectedCommit}
         commits={commits}
         existingLocalBranches={localBranches.map((b) => b.name)}
+        initialBaseOption={branchBaseOption}
         onSuccess={() => {
           refreshAll();
         }}
@@ -1870,12 +1994,34 @@ function App() {
       {commitContextMenu && (
         <div
           style={{ top: commitContextMenu.y, left: commitContextMenu.x }}
-          className="fixed z-50 w-52 bg-zinc-900 border border-zinc-700 rounded-md shadow-2xl py-1 text-xs text-zinc-200"
+          className="fixed z-50 w-56 bg-zinc-900 border border-zinc-700 rounded-md shadow-2xl py-1 text-xs text-zinc-200"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-3 py-1.5 text-[10px] text-zinc-500 border-b border-zinc-800 font-mono truncate">
             {commitContextMenu.commit.short_hash} · {commitContextMenu.commit.summary}
           </div>
+          <button
+            onClick={() => {
+              const target = commitContextMenu.commit;
+              setCommitContextMenu(null);
+              handleCheckoutCommit(target);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-zinc-800 flex items-center space-x-2 cursor-pointer transition-colors"
+          >
+            <GitCommit size={13} className="text-sky-400" />
+            <span>Checkout Commit...</span>
+          </button>
+          <button
+            onClick={() => {
+              const target = commitContextMenu.commit;
+              setCommitContextMenu(null);
+              handleCreateBranchFromCommit(target);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-zinc-800 flex items-center space-x-2 cursor-pointer transition-colors"
+          >
+            <GitBranch size={13} className="text-purple-400" />
+            <span>Create Branch...</span>
+          </button>
           <button
             onClick={() => {
               const targetHash = commitContextMenu.commit.hash;
@@ -1887,16 +2033,52 @@ function App() {
             <Tag size={13} className="text-amber-400" />
             <span>Tag...</span>
           </button>
+
+          <div className="my-1 border-t border-zinc-800" />
+
+          <button
+            onClick={() => {
+              const target = commitContextMenu.commit;
+              setCommitContextMenu(null);
+              handleCherryPickCommit(target);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-zinc-800 flex items-center space-x-2 cursor-pointer transition-colors"
+          >
+            <GitPullRequest size={13} className="text-emerald-400" />
+            <span>Cherry-pick...</span>
+          </button>
+          <button
+            onClick={() => {
+              const target = commitContextMenu.commit;
+              setCommitContextMenu(null);
+              handleRevertCommit(target);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-zinc-800 flex items-center space-x-2 cursor-pointer transition-colors"
+          >
+            <Undo2 size={13} className="text-orange-400" />
+            <span>Revert Commit...</span>
+          </button>
+          <button
+            onClick={() => {
+              const target = commitContextMenu.commit;
+              setCommitContextMenu(null);
+              setResetTargetCommit(target);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-red-950/40 text-red-300 flex items-center space-x-2 cursor-pointer transition-colors"
+          >
+            <AlertTriangle size={13} className="text-red-400" />
+            <span>Reset Branch to Here...</span>
+          </button>
+
+          <div className="my-1 border-t border-zinc-800" />
+
           <button
             onClick={() => {
               const hash = commitContextMenu.commit.hash;
+              const shortHash = commitContextMenu.commit.short_hash;
               setCommitContextMenu(null);
               navigator.clipboard.writeText(hash);
-              setFetchToast({
-                message: `Copied hash ${commitContextMenu.commit.short_hash}`,
-                type: "success",
-              });
-              setTimeout(() => setFetchToast(null), 2500);
+              showToast(`Copied hash ${shortHash}`, "success", 2500);
             }}
             className="w-full text-left px-3 py-1.5 hover:bg-zinc-800 flex items-center space-x-2 cursor-pointer transition-colors"
           >
@@ -1905,6 +2087,15 @@ function App() {
           </button>
         </div>
       )}
+
+      {/* RESET COMMIT MODAL */}
+      <ResetCommitModal
+        isOpen={!!resetTargetCommit}
+        onClose={() => setResetTargetCommit(null)}
+        currentBranch={summary?.current_branch || null}
+        commit={resetTargetCommit}
+        onConfirm={handleConfirmResetCommit}
+      />
 
       {/* CREATE TAG MODAL */}
       <CreateTagModal

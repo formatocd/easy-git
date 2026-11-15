@@ -10,6 +10,7 @@ interface CreateBranchModalProps {
   currentCommit: CommitWithGraph | null;
   commits?: CommitWithGraph[];
   existingLocalBranches: string[];
+  initialBaseOption?: "head" | "commit";
   onSuccess: () => void;
 }
 
@@ -21,6 +22,7 @@ export const CreateBranchModal: React.FC<CreateBranchModalProps> = ({
   currentCommit,
   commits = [],
   existingLocalBranches,
+  initialBaseOption = "head",
   onSuccess,
 }) => {
   const [branchName, setBranchName] = useState("");
@@ -48,6 +50,7 @@ export const CreateBranchModal: React.FC<CreateBranchModalProps> = ({
     }
 
     // Initialize commit input with currentCommit if available, or most recent commit
+    setBaseOption(initialBaseOption);
     if (currentCommit && currentCommit.hash !== "uncommitted") {
       setCustomCommitHash(currentCommit.short_hash);
       setCommitSummary(currentCommit.summary);
