@@ -7,7 +7,7 @@ use std::os::windows::process::CommandExt;
 
 use crate::models::{
     AheadBehind, Branch, Commit, CommitWithGraph, FileChange, MergeResult, RemoteInfo, RepoSummary,
-    StashEntry, WorkingFile, WorkingTreeStatus,
+    StashEntry, TagInfo, WorkingFile, WorkingTreeStatus,
 };
 
 #[cfg(windows)]
@@ -1593,4 +1593,213 @@ pub fn get_stash_file_diff(
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+// ---------------------------------------------------------
+// Tag Operations
+// ---------------------------------------------------------
+
+pub fn get_tags(repo_path: &str) -> Result<Vec<TagInfo>, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let output = create_git_command(repo_path)
+        .args([
+            "for-each-ref",
+            "--sort=-creatordate",
+            "--format=%(refname:short)%00%(objecttype)%00%(*objectname)%00%(objectname)%00%(subject)%00%(taggername)%00%(creatordate:unix)",
+            "refs/tags",
+        ])
+        .output()
+        .map_err(|e| format!("Failed to list tags: {}", e))?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut tags = Vec::new();
+
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let parts: Vec<&str> = line.split('\x00').collect();
+        if parts.len() < 7 {
+            continue;
+        }
+
+        let name = parts[0].trim().to_string();
+        let object_type = parts[1].trim();
+        let deref_hash = parts[2].trim();
+        let obj_hash = parts[3].trim();
+        let subject = parts[4].trim();
+        let tagger = parts[5].trim().to_string();
+        let timestamp = parts[6].trim().parse::<i64>().unwrap_or(0);
+
+        let is_annotated = object_type == "tag";
+        let target_hash = if !deref_hash.is_empty() {
+            deref_hash.to_string()
+        } else {
+            obj_hash.to_string()
+        };
+        let message = if is_annotated {
+            subject.to_string()
+        } else {
+            String::new()
+        };
+
+        tags.push(TagInfo {
+            name,
+            target_hash,
+            message,
+            is_annotated,
+            tagger,
+            timestamp,
+        });
+    }
+
+    Ok(tags)
+}
+
+pub fn create_tag(
+    repo_path: &str,
+    name: &str,
+    target: Option<&str>,
+    message: Option<&str>,
+) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let tag_name = name.trim();
+    if tag_name.is_empty() {
+        return Err("Tag name cannot be empty.".to_string());
+    }
+
+    let mut args: Vec<String> = vec!["tag".to_string()];
+    if let Some(msg) = message {
+        let trimmed_msg = msg.trim();
+        if !trimmed_msg.is_empty() {
+            args.push("-a".to_string());
+            args.push(tag_name.to_string());
+            args.push("-m".to_string());
+            args.push(trimmed_msg.to_string());
+        } else {
+            args.push(tag_name.to_string());
+        }
+    } else {
+        args.push(tag_name.to_string());
+    }
+
+    if let Some(t) = target {
+        let trimmed_target = t.trim();
+        if !trimmed_target.is_empty() {
+            args.push(trimmed_target.to_string());
+        }
+    }
+
+    let output = create_git_command(repo_path)
+        .args(&args)
+        .output()
+        .map_err(|e| format!("Failed to create tag: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if !err.is_empty() {
+            err
+        } else {
+            "Failed to create tag.".to_string()
+        });
+    }
+
+    Ok(format!("Created tag '{}'", tag_name))
+}
+
+pub fn delete_tag(repo_path: &str, name: &str) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let output = create_git_command(repo_path)
+        .args(["tag", "-d", name.trim()])
+        .output()
+        .map_err(|e| format!("Failed to delete tag: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if !err.is_empty() {
+            err
+        } else {
+            "Failed to delete tag.".to_string()
+        });
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+pub fn delete_remote_tag(repo_path: &str, remote: &str, name: &str) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let ref_spec = format!("refs/tags/{}", name.trim());
+    let output = create_git_command(repo_path)
+        .args(["push", remote.trim(), "--delete", &ref_spec])
+        .output()
+        .map_err(|e| format!("Failed to delete remote tag: {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if !err.is_empty() {
+            err
+        } else {
+            "Failed to delete remote tag.".to_string()
+        });
+    }
+
+    Ok(format!("Deleted remote tag '{}' from '{}'", name.trim(), remote.trim()))
+}
+
+pub fn push_tag(repo_path: &str, remote: &str, name: Option<&str>) -> Result<String, String> {
+    if !is_git_repo(repo_path) {
+        return Err(format!("'{}' is not a Git repository", repo_path));
+    }
+
+    let mut args = vec!["push".to_string(), remote.trim().to_string()];
+    if let Some(tag_name) = name {
+        let trimmed = tag_name.trim();
+        if !trimmed.is_empty() {
+            args.push(format!("refs/tags/{}", trimmed));
+        } else {
+            args.push("--tags".to_string());
+        }
+    } else {
+        args.push("--tags".to_string());
+    }
+
+    let output = create_git_command(repo_path)
+        .args(&args)
+        .output()
+        .map_err(|e| format!("Failed to push tag(s): {}", e))?;
+
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if !err.is_empty() {
+            err
+        } else {
+            "Failed to push tag(s).".to_string()
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let combined = format!("{}\n{}", stdout, stderr).trim().to_string();
+    Ok(if combined.is_empty() {
+        "Tags pushed successfully".to_string()
+    } else {
+        combined
+    })
 }

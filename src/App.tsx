@@ -20,6 +20,10 @@ import {
   stashDrop,
   getStashFiles,
   getStashFileDiff,
+  getTags,
+  deleteTag,
+  deleteRemoteTag,
+  pushTag,
   MergeResult,
   RepoSummary,
   CommitWithGraph,
@@ -28,6 +32,7 @@ import {
   RemoteInfo,
   AheadBehind,
   StashEntry,
+  TagInfo,
 } from "./api/git";
 import { GraphCell } from "./components/GraphCell";
 import { DiffViewer } from "./components/DiffViewer";
@@ -44,6 +49,8 @@ import { ErrorModal } from "./components/ErrorModal";
 import { ConfirmCheckoutModal } from "./components/ConfirmCheckoutModal";
 import { StashModal } from "./components/StashModal";
 import { StashList } from "./components/StashList";
+import { CreateTagModal } from "./components/CreateTagModal";
+import { TagList } from "./components/TagList";
 import {
   FolderOpen,
   GitBranch,
@@ -78,6 +85,7 @@ function App() {
   const [remotes, setRemotes] = useState<RemoteInfo[]>([]);
   const [aheadBehind, setAheadBehind] = useState<AheadBehind>({ ahead: 0, behind: 0 });
   const [stashes, setStashes] = useState<StashEntry[]>([]);
+  const [tags, setTags] = useState<TagInfo[]>([]);
 
   // Modals & Remote Operations State
   const [isPullOpen, setIsPullOpen] = useState(false);
@@ -86,6 +94,14 @@ function App() {
   const [isCreateBranchOpen, setIsCreateBranchOpen] = useState(false);
   const [isMergeOpen, setIsMergeOpen] = useState(false);
   const [isStashModalOpen, setIsStashModalOpen] = useState(false);
+  const [isCreateTagOpen, setIsCreateTagOpen] = useState(false);
+  const [tagTargetHash, setTagTargetHash] = useState<string | null>(null);
+  const [selectedTagName, setSelectedTagName] = useState<string | null>(null);
+  const [commitContextMenu, setCommitContextMenu] = useState<{
+    x: number;
+    y: number;
+    commit: CommitWithGraph;
+  } | null>(null);
   const [mergeSourceBranch, setMergeSourceBranch] = useState<string | null>(null);
   const [isAbortingMerge, setIsAbortingMerge] = useState(false);
   const [checkoutRemoteTarget, setCheckoutRemoteTarget] = useState<Branch | null>(null);
@@ -150,12 +166,13 @@ function App() {
 
     try {
       const repoSummary = await openRepository(path);
-      const [repoBranches, repoCommits, repoRemotes, ab, repoStashes] = await Promise.all([
+      const [repoBranches, repoCommits, repoRemotes, ab, repoStashes, repoTags] = await Promise.all([
         getBranches(path),
         getCommitGraph(path, 100),
         getRemotes(path).catch(() => []),
         getAheadBehind(path).catch(() => ({ ahead: 0, behind: 0 })),
         getStashes(path).catch(() => []),
+        getTags(path).catch(() => []),
       ]);
 
       setSummary(repoSummary);
@@ -164,6 +181,8 @@ function App() {
       setRemotes(repoRemotes);
       setAheadBehind(ab);
       setStashes(repoStashes);
+      setTags(repoTags);
+      setSelectedTagName(null);
       setSelectedStash(null);
       setStashFiles([]);
       setSelectedStashFile(null);
@@ -366,13 +385,14 @@ function App() {
     if (!repoPath || isRefreshingRef.current) return;
     isRefreshingRef.current = true;
     try {
-      const [repoSummary, repoBranches, repoCommits, repoRemotes, ab, repoStashes] = await Promise.all([
+      const [repoSummary, repoBranches, repoCommits, repoRemotes, ab, repoStashes, repoTags] = await Promise.all([
         openRepository(repoPath),
         getBranches(repoPath),
         getCommitGraph(repoPath, 100),
         getRemotes(repoPath).catch(() => []),
         getAheadBehind(repoPath).catch(() => ({ ahead: 0, behind: 0 })),
         getStashes(repoPath).catch(() => []),
+        getTags(repoPath).catch(() => []),
       ]);
 
       setSummary(repoSummary);
@@ -381,6 +401,7 @@ function App() {
       setRemotes(repoRemotes);
       setAheadBehind(ab);
       setStashes(repoStashes);
+      setTags(repoTags);
       setRefreshKey((k) => k + 1);
 
       setSelectedStash((prev) => {
@@ -440,6 +461,115 @@ function App() {
     setActiveView("history");
     refreshAll();
   }, [refreshAll]);
+
+  useEffect(() => {
+    const closeMenu = () => setCommitContextMenu(null);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCommitContextMenu(null);
+    };
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  const handleOpenCreateTag = (explicitHash?: string | null) => {
+    const target =
+      explicitHash !== undefined
+        ? explicitHash
+        : selectedCommit && selectedCommit.hash !== "uncommitted"
+        ? selectedCommit.hash
+        : null;
+    setTagTargetHash(target);
+    setIsCreateTagOpen(true);
+  };
+
+  const handleSelectTag = (tag: TagInfo) => {
+    setSelectedTagName(tag.name);
+    setActiveView("history");
+    if (tag.target_hash) {
+      const matchingCommit = commits.find(
+        (c) =>
+          c.hash === tag.target_hash ||
+          c.hash.startsWith(tag.target_hash) ||
+          tag.target_hash.startsWith(c.hash),
+      );
+      if (matchingCommit) {
+        setSelectedCommit(matchingCommit);
+      }
+    }
+  };
+
+  const handlePushTag = async (tag: TagInfo, remote: string) => {
+    if (!repoPath) return;
+    try {
+      await pushTag(repoPath, remote, tag.name);
+      await refreshAll();
+      setFetchToast({
+        message: `Pushed tag '${tag.name}' to '${remote}'`,
+        type: "success",
+      });
+      setTimeout(() => setFetchToast(null), 4000);
+    } catch (err: unknown) {
+      const msg = typeof err === "string" ? err : String(err);
+      showError("Push Tag Failed", msg);
+    }
+  };
+
+  const handleDeleteTag = async (tag: TagInfo) => {
+    if (!repoPath) return;
+    const confirmed = await ask(
+      `Are you sure you want to delete local tag '${tag.name}'?`,
+      {
+        title: "Delete Local Tag",
+        kind: "warning",
+      },
+    );
+    if (!confirmed) return;
+
+    try {
+      await deleteTag(repoPath, tag.name);
+      if (selectedTagName === tag.name) {
+        setSelectedTagName(null);
+      }
+      await refreshAll();
+      setFetchToast({
+        message: `Deleted tag '${tag.name}'`,
+        type: "success",
+      });
+      setTimeout(() => setFetchToast(null), 4000);
+    } catch (err: unknown) {
+      const msg = typeof err === "string" ? err : String(err);
+      showError("Delete Tag Failed", msg);
+    }
+  };
+
+  const handleDeleteRemoteTag = async (tag: TagInfo, remote: string) => {
+    if (!repoPath) return;
+    const confirmed = await ask(
+      `Are you sure you want to delete tag '${tag.name}' from remote '${remote}'?`,
+      {
+        title: "Delete Remote Tag",
+        kind: "warning",
+      },
+    );
+    if (!confirmed) return;
+
+    try {
+      await deleteRemoteTag(repoPath, remote, tag.name);
+      await refreshAll();
+      setFetchToast({
+        message: `Deleted remote tag '${tag.name}' from '${remote}'`,
+        type: "success",
+      });
+      setTimeout(() => setFetchToast(null), 4000);
+    } catch (err: unknown) {
+      const msg = typeof err === "string" ? err : String(err);
+      showError("Delete Remote Tag Failed", msg);
+    }
+  };
 
   const handleSelectStash = (stash: StashEntry) => {
     setSelectedStash(stash);
@@ -921,6 +1051,14 @@ function App() {
             <Archive size={14} className="text-orange-400" />
             <span>Stash</span>
           </button>
+          <button
+            onClick={() => handleOpenCreateTag()}
+            className="flex items-center space-x-1 px-2.5 py-1.5 text-zinc-300 hover:bg-zinc-800 rounded text-xs transition cursor-pointer"
+            title="Create tag on selected commit"
+          >
+            <Tag size={14} className="text-amber-400" />
+            <span>Tag</span>
+          </button>
         </div>
 
         {summary && (
@@ -1093,6 +1231,35 @@ function App() {
               </div>
             </div>
 
+            {/* TAGS */}
+            <div>
+              <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1 group">
+                <span className="flex items-center space-x-1.5">
+                  <Tag size={13} className="text-amber-400" />
+                  <span>Tags ({tags.length})</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleOpenCreateTag()}
+                  className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-amber-400 transition cursor-pointer"
+                  title="Create Tag"
+                >
+                  <Plus size={13} />
+                </button>
+              </div>
+              <div className="mt-1">
+                <TagList
+                  tags={tags}
+                  remotes={remotes}
+                  selectedTagName={activeView === "history" ? selectedTagName : null}
+                  onSelectTag={handleSelectTag}
+                  onPushTag={handlePushTag}
+                  onDeleteTag={handleDeleteTag}
+                  onDeleteRemoteTag={handleDeleteRemoteTag}
+                />
+              </div>
+            </div>
+
             {/* STASHES */}
             <div>
               <div className="flex items-center justify-between text-zinc-400 font-medium px-2 py-1 group">
@@ -1253,6 +1420,16 @@ function App() {
                             setSelectedCommit(c);
                           }
                         }}
+                        onContextMenu={(e) => {
+                          if (isUncommitted) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const menuWidth = 210;
+                          const menuHeight = 110;
+                          const x = Math.min(e.clientX, window.innerWidth - menuWidth - 8);
+                          const y = Math.min(e.clientY, window.innerHeight - menuHeight - 8);
+                          setCommitContextMenu({ x, y, commit: c });
+                        }}
                         className={`cursor-pointer transition-colors ${
                           isSelected
                             ? "bg-blue-600/20 text-white"
@@ -1284,20 +1461,27 @@ function App() {
                               </span>
                             ) : (
                               <>
-                                {c.refs.map((ref) => (
-                                  <span
-                                    key={ref}
-                                    className={`text-[9px] px-1.5 py-0.2 rounded-full font-semibold shrink-0 ${
-                                      ref.includes("HEAD")
-                                        ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
-                                        : ref.includes("origin/")
-                                        ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
-                                        : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
-                                    }`}
-                                  >
-                                    {ref}
-                                  </span>
-                                ))}
+                                {c.refs.map((ref) => {
+                                  const isTag = ref.startsWith("tag: ");
+                                  const displayRef = isTag ? ref.slice(5) : ref;
+                                  return (
+                                    <span
+                                      key={ref}
+                                      className={`text-[9px] px-1.5 py-0.2 rounded-full font-semibold shrink-0 inline-flex items-center space-x-1 ${
+                                        ref.includes("HEAD")
+                                          ? "bg-sky-500/20 text-sky-300 border border-sky-500/40"
+                                          : isTag
+                                          ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                                          : ref.includes("origin/")
+                                          ? "bg-purple-500/20 text-purple-300 border border-purple-500/40"
+                                          : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                                      }`}
+                                    >
+                                      {isTag && <Tag size={9} className="shrink-0" />}
+                                      <span>{displayRef}</span>
+                                    </span>
+                                  );
+                                })}
                                 <span className="truncate">{c.summary}</span>
                               </>
                             )}
@@ -1561,6 +1745,68 @@ function App() {
           onConfirm={handleConfirmCheckout}
         />
       )}
+
+      {/* COMMIT CONTEXT MENU */}
+      {commitContextMenu && (
+        <div
+          style={{ top: commitContextMenu.y, left: commitContextMenu.x }}
+          className="fixed z-50 w-52 bg-zinc-900 border border-zinc-700 rounded-md shadow-2xl py-1 text-xs text-zinc-200"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1.5 text-[10px] text-zinc-500 border-b border-zinc-800 font-mono truncate">
+            {commitContextMenu.commit.short_hash} · {commitContextMenu.commit.summary}
+          </div>
+          <button
+            onClick={() => {
+              const targetHash = commitContextMenu.commit.hash;
+              setCommitContextMenu(null);
+              handleOpenCreateTag(targetHash);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-zinc-800 flex items-center space-x-2 cursor-pointer transition-colors"
+          >
+            <Tag size={13} className="text-amber-400" />
+            <span>Tag...</span>
+          </button>
+          <button
+            onClick={() => {
+              const hash = commitContextMenu.commit.hash;
+              setCommitContextMenu(null);
+              navigator.clipboard.writeText(hash);
+              setFetchToast({
+                message: `Copied hash ${commitContextMenu.commit.short_hash}`,
+                type: "success",
+              });
+              setTimeout(() => setFetchToast(null), 2500);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-zinc-800 flex items-center space-x-2 cursor-pointer transition-colors"
+          >
+            <Copy size={13} className="text-zinc-400" />
+            <span>Copy Commit Hash</span>
+          </button>
+        </div>
+      )}
+
+      {/* CREATE TAG MODAL */}
+      <CreateTagModal
+        isOpen={isCreateTagOpen}
+        onClose={() => {
+          setIsCreateTagOpen(false);
+          setTagTargetHash(null);
+        }}
+        repoPath={repoPath}
+        currentBranch={summary?.current_branch || null}
+        commits={commits}
+        remotes={remotes}
+        initialTargetHash={tagTargetHash}
+        onSuccess={(tagName) => {
+          refreshAll();
+          setFetchToast({
+            message: `Tag '${tagName}' created successfully`,
+            type: "success",
+          });
+          setTimeout(() => setFetchToast(null), 4000);
+        }}
+      />
 
       {/* STASH MODAL */}
       <StashModal

@@ -94,6 +94,15 @@ export interface StashEntry {
   timestamp: number;
 }
 
+export interface TagInfo {
+  name: string;
+  target_hash: string;
+  message: string;
+  is_annotated: boolean;
+  tagger: string;
+  timestamp: number;
+}
+
 export async function isGitRepo(path: string): Promise<boolean> {
   return invoke<boolean>("is_git_repo", { path });
 }
@@ -383,4 +392,46 @@ export async function getStashFileDiff(
   filePath: string,
 ): Promise<string> {
   return invoke<string>("get_stash_file_diff", { path, reference, filePath });
+}
+
+export async function getTags(path: string): Promise<TagInfo[]> {
+  return invoke<TagInfo[]>("get_tags", { path });
+}
+
+export async function createTag(
+  path: string,
+  name: string,
+  target?: string,
+  message?: string,
+): Promise<string> {
+  return invoke<string>("create_tag", {
+    path,
+    name,
+    target: target || null,
+    message: message || null,
+  });
+}
+
+export async function deleteTag(path: string, name: string): Promise<string> {
+  return invoke<string>("delete_tag", { path, name });
+}
+
+export async function deleteRemoteTag(
+  path: string,
+  remote: string,
+  name: string,
+): Promise<string> {
+  return invoke<string>("delete_remote_tag", { path, remote, name });
+}
+
+export async function pushTag(
+  path: string,
+  remote: string,
+  name?: string,
+): Promise<string> {
+  return invoke<string>("push_tag", {
+    path,
+    remote,
+    name: name || null,
+  });
 }
